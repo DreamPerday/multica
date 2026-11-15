@@ -13,9 +13,9 @@
  * confirmation via `Alert.alert` per iOS HIG (destructive actions need
  * a second tap).
  */
+import { showActionSheetWithOptions } from "@/components/ui/action-sheet";
 import { useCallback } from "react";
 import {
-  ActionSheetIOS,
   ActivityIndicator,
   Alert,
   Linking,
@@ -113,7 +113,7 @@ export default function ProjectDetail() {
                 : t("common:actions.delete"),
     );
     const destructiveIndex = actions.indexOf("delete");
-    ActionSheetIOS.showActionSheetWithOptions(
+    showActionSheetWithOptions(
       {
         options,
         cancelButtonIndex: 0,

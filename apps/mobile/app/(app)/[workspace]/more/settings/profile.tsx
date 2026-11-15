@@ -10,9 +10,9 @@
  * store via setUser — same source-of-truth pattern as web (server response
  * is authoritative, never the local form state).
  */
+import { showActionSheetWithOptions } from "@/components/ui/action-sheet";
 import { useState } from "react";
 import {
-  ActionSheetIOS,
   Alert,
   ActivityIndicator,
   Pressable,
@@ -78,7 +78,7 @@ export default function ProfileSettingsScreen() {
             : t("common:actions.cancel"),
     );
 
-    ActionSheetIOS.showActionSheetWithOptions(
+    showActionSheetWithOptions(
       {
         options: visibleOptions,
         cancelButtonIndex: cancelIndex,

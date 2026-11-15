@@ -1,0 +1,26 @@
+# Model-route overlay for the DSH runs Multica drives.
+#
+# `dsh-base` hardcodes the agent default model as:
+#
+#   - id: agent-default-model
+#     config:
+#       provider: deepseek-official
+#       model: deepseek-flash
+#
+# `deepseek-official` is DSH's built-in route, which resolves its key from
+# DEEPSEEK_API_KEY. That credential is only present when DSH Desktop's UI signs
+# in to a DeepSeek Account, and `dsh --profile headless` never does — so every
+# run fails with MISSING_CREDENTIAL.
+#
+# CC-Switch already syncs working provider routes into the headless profile
+# (`llm-pi-ai` → `cc-switch-open-code-go` on opencode.ai, plus a `ztoken` route)
+# with their keys stored in DSH's credential store under `apiKeyEnv` refs. Only
+# the *default* still pointed at the built-in route.
+#
+# This layer is applied by the bridge via `dsh --patch`, i.e. AFTER the profile
+# layer — so re-syncing CC-Switch (which rewrites cordis.patch.yml) cannot drop
+# it, and DSH's own configuration is never edited.
+- id: agent-default-model
+  config:
+    provider: cc-switch-open-code-go
+    model: deepseek-v4.1-flash

@@ -5,9 +5,9 @@
  * Present nested reaction sheets from the outer sheet's completion callback;
  * iOS cannot present the next ActionSheet while the first is dismissing.
  */
+import { showActionSheetWithOptions } from "@/components/ui/action-sheet";
 import { useCallback, useState } from "react";
-import { ActionSheetIOS, Alert } from "react-native";
-import { router } from "expo-router";
+import { Alert } from "react-native";import { router } from "expo-router";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { useQuery } from "@tanstack/react-query";
@@ -98,7 +98,7 @@ export function useCommentLongPress(
       ? actions.findIndex((a) => a.kind === "delete")
       : undefined;
 
-    ActionSheetIOS.showActionSheetWithOptions(
+    showActionSheetWithOptions(
       {
         options,
         cancelButtonIndex,
@@ -229,7 +229,7 @@ function presentReactSheet(args: {
   ];
   const cancelButtonIndex = options.length - 1;
 
-  ActionSheetIOS.showActionSheetWithOptions(
+  showActionSheetWithOptions(
     { options, cancelButtonIndex },
     (i) => {
       if (i === cancelButtonIndex) return;

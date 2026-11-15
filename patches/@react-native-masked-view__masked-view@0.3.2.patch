@@ -1,0 +1,24 @@
+diff --git a/android/build.gradle b/android/build.gradle
+index ed87f7388da6f82b99592a247c80befbb3f68acd..4bfd507ec2689eb8d79dbcebd60aed1989ede1e9 100644
+--- a/android/build.gradle
++++ b/android/build.gradle
+@@ -20,6 +20,11 @@ apply plugin: 'com.android.library'
+ def agpVersion = com.android.Version.ANDROID_GRADLE_PLUGIN_VERSION.tokenize('.')[0].toInteger()
+ def shouldUseNameSpace = agpVersion >= 7
+ def PACKAGE_PROP = "package=\"org.reactnative.maskedview\""
++// Under AGP 7+ the `namespace` block below supplies the package name, so
++// rewriting AndroidManifest.xml at configuration time changes nothing and
++// fails whenever the dependency tree is not writable (read-only stores,
++// sandboxed builds). Only the legacy AGP < 7 path performs the rewrite.
++if (!shouldUseNameSpace) {
+ def manifestOutFile = file("${projectDir}/src/main/AndroidManifest.xml")
+ def manifestContent = manifestOutFile.getText()
+ if(shouldUseNameSpace){
+@@ -37,6 +42,7 @@ if(shouldUseNameSpace){
+ }
+ manifestContent.replaceAll("  ", " ")
+ manifestOutFile.write(manifestContent)
++}
+ 
+ android {
+   compileSdkVersion safeExtGet('compileSdkVersion', 28)
