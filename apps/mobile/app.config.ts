@@ -62,8 +62,35 @@ export default ({ config }: ConfigContext): ExpoConfig => {
           ? (process.env.EXPO_BUNDLE_IDENTIFIER_STAGING ?? "ai.multica.mobile.staging")
           : (process.env.EXPO_BUNDLE_IDENTIFIER_DEV ?? "ai.multica.mobile.dev"),
     },
+    // Android mirror of the iOS per-variant bundle identifiers above. Android
+    // answers to the same reverse-domain scheme, so the dev / staging / prod
+    // APKs coexist on one phone exactly like the iOS builds do. There is no
+    // Apple team or provisioning involved — the suffix alone keeps them apart.
+    android: {
+      package: isProd
+        ? (process.env.EXPO_ANDROID_PACKAGE_PROD ?? "ai.multica.mobile")
+        : isStaging
+          ? (process.env.EXPO_ANDROID_PACKAGE_STAGING ?? "ai.multica.mobile.staging")
+          : (process.env.EXPO_ANDROID_PACKAGE_DEV ?? "ai.multica.mobile.dev"),
+      // The iOS icon is full-bleed and macOS masks it once; Android masks an
+      // adaptive icon harder, so the same PNG loses the outer arms of the mark
+      // inside the launch icon's circle/squircle. `adaptive-icon.png` is that
+      // mark extracted onto a transparent field, normalised to the central 42%
+      // of the 108dp canvas: Android only shows the middle 66%, so the mark
+      // draws at ~63% of the visible tile — the same proportion as the original
+      // — and its bounding-box corners stay inside the mask radius instead of
+      // being sliced off. Over the same black the original icon uses.
+      adaptiveIcon: {
+        foregroundImage: "./assets/adaptive-icon.png",
+        backgroundColor: "#0b0b0c",
+        monochromeImage: "./assets/adaptive-icon.png",
+      },
+    },
     plugins: [
       "expo-router",
+      // Aligns libc++_shared.so with fbjni; without it Android aborts at
+      // startup with "cannot locate symbol __cxa_init_primary_exception".
+      "./plugins/with-fbjni-libcxx",
       "expo-image",
       "expo-localization",
       "expo-secure-store",
@@ -90,6 +117,18 @@ export default ({ config }: ConfigContext): ExpoConfig => {
             // SDK 57's supported scene runtime is required for Xcode 27 builds.
             // Keep this in prebuild config so clean native generations retain it.
             enableSceneSupport: true,
+          },
+          android: {
+            // compileSdk 36 matches the platform installed by
+            // .toolchain/android-sdk; targetSdk 35 keeps Android 15 behavior
+            // while the app's edge-to-edge styles are verified on 16.
+            compileSdkVersion: 36,
+            targetSdkVersion: 36,
+            minSdkVersion: 24,
+            buildToolsVersion: "36.0.0",
+            // Shrink the release APK so a sideload over USB stays quick;
+            // resources are trimmed only for release builds.
+            enableProguardInReleaseBuilds: true,
           },
         },
       ],

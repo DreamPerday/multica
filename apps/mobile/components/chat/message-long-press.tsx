@@ -15,8 +15,8 @@
  * we have only 2 callers (chat + comments). Below the "3 callers + no
  * native alternative" threshold in apps/mobile/CLAUDE.md.
  */
+import { showActionSheetWithOptions } from "@/components/ui/action-sheet";
 import { useCallback, useState } from "react";
-import { ActionSheetIOS } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import type { ChatMessage } from "@multica/core/types";
@@ -55,7 +55,7 @@ export function useChatMessageLongPress(
 
     const cancelButtonIndex = options.length - 1;
 
-    ActionSheetIOS.showActionSheetWithOptions(
+    showActionSheetWithOptions(
       { options, cancelButtonIndex },
       (i) => {
         setIsPressed(false);

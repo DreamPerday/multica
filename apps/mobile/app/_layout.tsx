@@ -15,6 +15,7 @@ import { queryClient } from "@/data/query-client";
 import { useAuthStore } from "@/data/auth-store";
 import { useWorkspaceStore } from "@/data/workspace-store";
 import { SessionActivityBoundary } from "@/components/auth/session-activity-boundary";
+import { ActionSheetProvider } from "@/components/ui/action-sheet";
 import { LightboxProvider, prewarmHighlighter } from "@/lib/markdown";
 import { NAV_THEME } from "@/lib/theme";
 import { useColorScheme } from "@/lib/use-color-scheme";
@@ -79,7 +80,8 @@ export default function RootLayout() {
   const { colorScheme, isDarkColorScheme } = useColorScheme();
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <MobileI18nProvider>
+      <ActionSheetProvider>
+        <MobileI18nProvider>
         <SafeAreaProvider>
           <KeyboardProvider>
             <QueryClientProvider client={queryClient}>
@@ -101,7 +103,8 @@ export default function RootLayout() {
             </QueryClientProvider>
           </KeyboardProvider>
         </SafeAreaProvider>
-      </MobileI18nProvider>
+        </MobileI18nProvider>
+      </ActionSheetProvider>
     </GestureHandlerRootView>
   );
 }

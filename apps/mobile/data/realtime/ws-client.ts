@@ -59,6 +59,9 @@ export interface WSClientOptions {
   getToken?: () => string | null;
   /** Workspace slug — server resolves to UUID and gates membership. */
   workspaceSlug: string;
+  /** `client_os` upgrade param. Callers pass `Platform.OS`; kept out of this
+   *  module so the transport stays free of React Native imports. */
+  clientOs?: string;
   /** Mobile app version, surfaced to server logs for debuggability. */
   clientVersion?: string;
   logger?: Logger;
@@ -77,6 +80,22 @@ const HEARTBEAT_INTERVAL_MS = 25_000;
 const HEARTBEAT_TIMEOUT_MS = 10_000;
 
 /**
+ * How long an opened socket may stay unauthenticated.
+ *
+ * The server acknowledges the auth frame with `auth_ack`, and nothing else on
+ * the connection is usable until that arrives. When the server decides not to
+ * answer — an expired session, a handshake it does not accept, a middlebox that
+ * let the upgrade through but dropped the frame — it also does not close the
+ * socket. Without this watchdog the client sat on a silently dead connection
+ * forever: no `auth_ack`, so no heartbeat, so no reconnect, and the app simply
+ * stopped receiving anything until it was restarted.
+ */
+const AUTH_TIMEOUT_MS = 10_000;
+
+/** Re-send the auth frame once if the ack has not arrived by then. */
+const AUTH_RESEND_MS = 1_000;
+
+/**
  * Lifecycle state — drives whether onclose schedules a reconnect:
  *   idle    — never connected, or fully disconnected. No reconnect on close.
  *   active  — wants to be connected. onclose → schedule reconnect.
@@ -93,6 +112,9 @@ export class WSClient {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private pongTimer: ReturnType<typeof setTimeout> | null = null;
   private awaitingPong = false;
+  private authTimer: ReturnType<typeof setTimeout> | null = null;
+  private authRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private authenticated = false;
   private hasConnectedBefore = false;
 
   private readonly handlers = new Map<WSEventType, Set<EventHandler>>();
@@ -204,7 +226,10 @@ export class WSClient {
     const url = new URL(this.opts.url);
     url.searchParams.set("workspace_slug", this.opts.workspaceSlug);
     url.searchParams.set("client_platform", "mobile");
-    url.searchParams.set("client_os", "ios");
+    // Caller-supplied: this file deliberately imports nothing from React Native
+    // so it stays unit-testable, and the platform used to be hardcoded to
+    // "ios" here, which made the server treat every Android install as iPhone.
+    url.searchParams.set("client_os", this.opts.clientOs ?? "ios");
     if (this.opts.clientVersion) {
       url.searchParams.set("client_version", this.opts.clientVersion);
     }
@@ -214,21 +239,54 @@ export class WSClient {
     this.logger.info("[ws] dialing", url.toString().replace(/token=[^&]*/, "token=…"));
 
     ws.onopen = () => {
-      this.logger.info("[ws] socket open, sending auth frame");
-      ws.send(
-        JSON.stringify({
-          type: "auth",
-          payload: { token: this.opts.getToken?.() ?? this.opts.token },
-        }),
-      );
+      const fromApi = this.opts.getToken?.();
+      const token = fromApi ?? this.opts.token;
+      this.logger.info("[ws] socket open, sending auth frame", {
+        tokenLength: token?.length ?? 0,
+        tokenSource: fromApi ? "api" : "storage",
+        readyState: ws.readyState,
+      });
+      this.authenticated = false;
+      this.sendAuthFrame(ws, token);
+      // Android occasionally loses the frame written from inside `onopen` — the
+      // server then waits for a first frame that never arrives, answering with
+      // neither an ack nor an error, and the connection looks healthy forever.
+      // Re-sending before the watchdog fires turns that into a recoverable
+      // hiccup instead of a dead socket.
+      this.clearAuthRetryTimer();
+      this.authRetryTimer = setTimeout(() => {
+        this.authRetryTimer = null;
+        if (this.ws !== ws || this.authenticated) return;
+        this.logger.warn("[ws] no auth_ack after retry, re-sending auth frame");
+        this.sendAuthFrame(ws, this.opts.getToken?.() ?? this.opts.token);
+      }, AUTH_RESEND_MS);
+      // The socket is useless until auth_ack arrives; see AUTH_TIMEOUT_MS.
+      this.clearAuthTimer();
+      this.authTimer = setTimeout(() => {
+        this.authTimer = null;
+        if (this.ws !== ws || this.authenticated) return;
+        this.logger.warn(
+          "[ws] no auth_ack within timeout, reconnecting",
+        );
+        this.forceReconnect();
+      }, AUTH_TIMEOUT_MS);
     };
 
     ws.onmessage = (event) => {
+      if (!this.authenticated) {
+        // Pre-auth, every frame matters: a silent server and a dropped frame
+        // look identical from the JS side once parsing fails.
+        const raw = event.data as unknown;
+        this.logger.info("[ws] pre-auth frame", {
+          kind: typeof raw,
+          ctor: (raw as { constructor?: { name?: string } })?.constructor?.name,
+        });
+      }
       let msg: WSMessage;
       try {
         msg = JSON.parse(event.data as string) as WSMessage;
       } catch {
-        this.logger.warn("[ws] non-JSON frame ignored");
+        this.logger.warn("[ws] non-JSON frame ignored", String(event.data).slice(0, 120));
         return;
       }
 
@@ -271,6 +329,9 @@ export class WSClient {
       if (!wasOurs) return;
 
       this.ws = null;
+      this.authenticated = false;
+      this.clearAuthTimer();
+      this.clearAuthRetryTimer();
       this.clearHeartbeat();
       this.logger.warn("[ws] socket closed");
       if (this.state === "active") this.scheduleReconnect();
@@ -279,6 +340,9 @@ export class WSClient {
 
   private onAuthenticated() {
     this.reconnectAttempt = 0;
+    this.authenticated = true;
+    this.clearAuthTimer();
+    this.clearAuthRetryTimer();
     this.logger.info("[ws] authenticated");
     this.startHeartbeat();
     if (this.hasConnectedBefore) {
@@ -315,6 +379,28 @@ export class WSClient {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
+    }
+  }
+
+  private clearAuthTimer() {
+    if (this.authTimer) {
+      clearTimeout(this.authTimer);
+      this.authTimer = null;
+    }
+  }
+
+  private clearAuthRetryTimer() {
+    if (this.authRetryTimer) {
+      clearTimeout(this.authRetryTimer);
+      this.authRetryTimer = null;
+    }
+  }
+
+  private sendAuthFrame(ws: WebSocket, token: string | null | undefined) {
+    try {
+      ws.send(JSON.stringify({ type: "auth", payload: { token } }));
+    } catch (err) {
+      this.logger.warn("[ws] auth frame send threw", err);
     }
   }
 

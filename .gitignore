@@ -4,6 +4,17 @@ dist
 .DS_Store
 .envrc
 
+# Android build workspace (this checkout only). The APK is a deliverable, so it
+# is carved back out of the `dist` rule above; the portable toolchain and the
+# build scratch space are local state, never committed.
+!.toolchain/
+.toolchain/
+app.config
+.tmp/
+.android-home/
+!dist/
+!dist/*.apk
+
 # build outputs
 .turbo
 .next
@@ -82,3 +93,7 @@ __pycache__/
 perf-report/
 # The production example is a tracked template; `.env*` above would hide it.
 !apps/mobile/.env.production.example
+
+# Local build outputs (not part of the source tree)
+dist/
+package/
