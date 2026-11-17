@@ -13,8 +13,9 @@
  * Workspace switch → replace the connection, preserving the navigation tree.
  *
  * Lifecycle signals:
- *   AppState 'background'  → pause socket (iOS will kill it anyway; clean
- *                            close avoids a kernel-level reset on resume)
+ *   AppState 'background'  → pause socket on iOS (the OS suspends it anyway);
+ *                            Android keeps it open so message alerts can
+ *                            continue until the OS suspends the process
  *   AppState 'active'      → resume socket
  *   AppState 'inactive'    → ignore (transient: app switcher / Control
  *                            Center / incoming call — tearing down here
@@ -36,6 +37,7 @@ import {
 } from "react";
 import { AppState, Platform, type AppStateStatus } from "react-native";
 import NetInfo from "@react-native-community/netinfo";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/data/auth-store";
 import { useWorkspaceStore } from "@/data/workspace-store";
 import { getToken } from "@/data/secure-storage";
@@ -52,6 +54,18 @@ if (!API_URL) {
 
 // http(s)://host → ws(s)://host/ws
 const WS_URL = `${API_URL.replace(/^http/, "ws")}/ws`;
+const REST_FALLBACK_INITIAL_MS = 5_000;
+const REST_FALLBACK_MAX_MS = 15_000;
+const REST_FALLBACK_BACKOFF = 1.6;
+const REST_FALLBACK_QUERY_ROOTS = new Set([
+  "inbox",
+  "chat",
+  "task-messages",
+  "agent-task-snapshot",
+  "issues",
+  "projects",
+  "pins",
+]);
 
 const RealtimeContext = createContext<WSClient | null>(null);
 
@@ -65,6 +79,7 @@ export function useWSClient(): WSClient | null {
 export function RealtimeProvider({ children }: { children: React.ReactNode }) {
   const userId = useAuthStore((s) => s.user?.id ?? null);
   const wsSlug = useWorkspaceStore((s) => s.currentWorkspaceSlug);
+  const queryClient = useQueryClient();
   const [connection, setConnection] = useState<{
     userId: string;
     wsSlug: string;
@@ -89,6 +104,10 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
     let ws: WSClient | null = null;
     let appStateSub: { remove: () => void } | null = null;
     let netInfoUnsub: (() => void) | null = null;
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    let fallbackActive = false;
+    let fallbackDelayMs = REST_FALLBACK_INITIAL_MS;
+    let appIsActive = AppState.currentState !== "background";
 
     void (async () => {
       const token = await getToken();
@@ -106,22 +125,77 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
         // server classified every Android build as an iPhone.
         clientOs: Platform.OS,
         clientVersion: "0.1.0",
-        logger: console,
+        logger: __DEV__
+          ? console
+          : {
+              info: () => {},
+              debug: () => {},
+              warn: console.warn,
+            },
       });
       ws.connect();
       setConnection({ userId, wsSlug, client: ws });
+
+      // Some carrier and corporate networks allow HTTPS requests but silently
+      // break WebSocket data frames. Keep one lightweight timer for recovery,
+      // but refresh only screens that consume realtime data and back off from
+      // 5s to 15s. Invalidating every active query every 3s saturated the
+      // phone during cold start and made the whole app feel slow.
+      const scheduleFallback = () => {
+        if (cancelled) return;
+        fallbackTimer = setTimeout(() => {
+          if (cancelled) return;
+          if (!ws || !appIsActive || ws.isAuthenticated()) {
+            if (fallbackActive && ws?.isAuthenticated()) {
+              console.info("[realtime] WS restored → REST fallback stopped");
+              fallbackActive = false;
+            }
+            fallbackDelayMs = REST_FALLBACK_INITIAL_MS;
+            scheduleFallback();
+            return;
+          }
+
+          if (!fallbackActive) {
+            console.info(
+              "[realtime] WS unauthenticated → REST fallback active",
+            );
+            fallbackActive = true;
+          }
+
+          void queryClient
+            .invalidateQueries({
+              type: "active",
+              predicate: (query) =>
+                REST_FALLBACK_QUERY_ROOTS.has(String(query.queryKey[0])),
+            })
+            .finally(() => {
+              if (cancelled) return;
+              fallbackDelayMs = Math.min(
+                Math.round(fallbackDelayMs * REST_FALLBACK_BACKOFF),
+                REST_FALLBACK_MAX_MS,
+              );
+              scheduleFallback();
+            });
+        }, fallbackDelayMs);
+      };
+      scheduleFallback();
 
       // ── AppState ────────────────────────────────────────────────
       appStateSub = AppState.addEventListener(
         "change",
         (status: AppStateStatus) => {
+          appIsActive = status === "active";
           if (status === "active") {
             // Foreground. The socket may have been paused (we put it
             // there on background) or it may be a zombie (iOS killed
             // it silently). resume() handles both with one fresh socket.
             ws?.resume();
           } else if (status === "background") {
-            ws?.pause();
+            // Android can continue delivering WebSocket frames for a while in
+            // the background. Closing the socket here made local message
+            // notifications impossible. iOS still pauses because its process
+            // is suspended almost immediately.
+            if (Platform.OS === "ios") ws?.pause();
           }
           // 'inactive' (iOS-only, transient) → ignore.
         },
@@ -147,10 +221,11 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
       cancelled = true;
       appStateSub?.remove();
       netInfoUnsub?.();
+      if (fallbackTimer) clearTimeout(fallbackTimer);
       ws?.disconnect();
       setConnection(null);
     };
-  }, [userId, wsSlug]);
+  }, [queryClient, userId, wsSlug]);
 
   return (
     <RealtimeContext.Provider value={client}>

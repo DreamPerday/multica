@@ -67,6 +67,11 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     // APKs coexist on one phone exactly like the iOS builds do. There is no
     // Apple team or provisioning involved — the suffix alone keeps them apart.
     android: {
+      // Android 13+ hides the notification permission from system settings
+      // unless the APK declares it. expo-notifications also contributes this
+      // permission; keep it explicit so a dependency change cannot silently
+      // remove the user-facing toggle.
+      permissions: ["POST_NOTIFICATIONS"],
       package: isProd
         ? (process.env.EXPO_ANDROID_PACKAGE_PROD ?? "ai.multica.mobile")
         : isStaging
@@ -88,6 +93,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     },
     plugins: [
       "expo-router",
+      "expo-notifications",
       // Aligns libc++_shared.so with fbjni; without it Android aborts at
       // startup with "cannot locate symbol __cxa_init_primary_exception".
       "./plugins/with-fbjni-libcxx",
