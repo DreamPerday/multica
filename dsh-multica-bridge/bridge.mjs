@@ -478,6 +478,10 @@ function runTurn(command, { onDone }) {
   // tool/status activity clears it, so a long-running step is never mistaken
   // for a finished turn.
   let lastTextAt = 0;
+  // Tool calls the runtime has started but not finished. A long command (DSH
+  // allows up to maxTimeoutMs, 10 min by default) is legitimate work, not a
+  // stalled turn, so the idle backstop must not fire underneath it.
+  const openCalls = new Set();
   let lastAssistantText = "";
   let turnEndTimer = null;
   let failure = null;
@@ -521,7 +525,10 @@ function runTurn(command, { onDone }) {
         return;
       case "tool_call": {
         const name = event.tool ?? event.name ?? "";
-        if (event.callId) toolNames.set(event.callId, name);
+        if (event.callId) {
+          toolNames.set(event.callId, name);
+          openCalls.add(event.callId);
+        }
         writeFrame({
           type: "tool_call",
           request_id: requestId,
@@ -532,6 +539,7 @@ function runTurn(command, { onDone }) {
         return;
       }
       case "tool_result":
+        if (event.callId) openCalls.delete(event.callId);
         writeFrame({
           type: "tool_result",
           request_id: requestId,
@@ -624,6 +632,11 @@ function runTurn(command, { onDone }) {
   // or the network pauses. Set DSH_BRIDGE_QUIET_MS only if you accept that
   // risk (e.g. 20000 on a fast local model).
   const quietMs = Number(process.env.DSH_BRIDGE_QUIET_MS ?? 0);
+  // Ceiling used while a tool call is still running. dsh-pwsh-local allows up to
+  // maxTimeoutMs (10 min by default), so a quiet minute mid-command is normal
+  // work rather than a stalled turn. Kept above that budget so dsh itself gets
+  // to time the command out first.
+  const toolCeilingMs = Number(process.env.DSH_BRIDGE_TOOL_CEILING_MS ?? 660_000);
   const stallTimer = setInterval(() => {
     if (settled) return;
     const idleMs = Date.now() - lastEventAt;
@@ -632,18 +645,23 @@ function runTurn(command, { onDone }) {
     // every 15s into the daemon's bounded stderr tail for every run.
     if (process.env.DSH_BRIDGE_WATCHDOG_LOG) {
       diag(`watchdog tick: idle ${idleMs}ms of ${stallMs}ms, sinceText ${sinceTextMs}ms`);
-    }    if (quietMs > 0 && lastTextAt !== 0 && sinceTextMs >= quietMs) {
+    }
+    if (quietMs > 0 && lastTextAt !== 0 && sinceTextMs >= quietMs) {
       diag(`assistant message quiet for ${sinceTextMs}ms; completing the run`);
       finish("completed");
       stopChild();
       return;
     }
-    if (idleMs < stallMs) return;
-    diag(`no dsh output for ${stallMs}ms; finishing the run`);
+    // While a tool call is open the runtime may legitimately be silent for
+    // minutes, so only the larger tool ceiling applies there.
+    const limitMs = openCalls.size > 0 ? toolCeilingMs : stallMs;
+    if (idleMs < limitMs) return;
+    const waiting = openCalls.size > 0 ? ` (${openCalls.size} tool call never returned)` : "";
+    diag(`no dsh output for ${limitMs}ms${waiting}; finishing the run`);
     finish("failed", {
       error: {
-        code: "DSH_STALLED",
-        message: `dsh produced no output for ${stallMs}ms after the last event`,
+        code: openCalls.size > 0 ? "DSH_TOOL_STALLED" : "DSH_STALLED",
+        message: `dsh produced no output for ${limitMs}ms after the last event${waiting}`,
       },
     });
     stopChild();
