@@ -44,6 +44,7 @@ import { useViewedIssuesStore } from "@/data/viewed-issues-store";
 import { useCommentSelectStore } from "@/data/comment-select-store";
 import { useReplyTargetStore } from "@/data/stores/reply-target-store";
 import { useT } from "@/lib/i18n";
+import { useManualRefresh } from "@/lib/use-manual-refresh";
 
 export default function IssueDetail() {
   // `highlight` + `h` come from inbox deep-link (apps/mobile/app/(app)/
@@ -90,12 +91,13 @@ export default function IssueDetail() {
     };
   }, []);
 
-  const onRefresh = useCallback(async () => {
+  const refreshIssue = useCallback(async () => {
     await Promise.all([
       detail.refetch(),
       qc.invalidateQueries({ queryKey: issueKeys.timeline(wsId, id) }),
     ]);
   }, [detail, qc, wsId, id]);
+  const { refreshing, onRefresh } = useManualRefresh(refreshIssue);
 
   const issue = detail.data;
   const deleteIssue = useDeleteIssue();
@@ -224,7 +226,7 @@ export default function IssueDetail() {
             issue={issue}
             entries={timeline.data}
             timelineLoading={timeline.isLoading}
-            refreshing={detail.isRefetching || timeline.isRefetching}
+            refreshing={refreshing}
             onRefresh={onRefresh}
             highlightCommentId={highlight}
             highlightNonce={h}

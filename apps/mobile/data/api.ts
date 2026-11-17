@@ -261,7 +261,9 @@ class ApiClient {
       else callerSignal.addEventListener("abort", onCallerAbort);
     }
 
-    console.log(`[api] → ${method} ${path}`, { rid });
+    if (__DEV__) {
+      console.log(`[api] → ${method} ${path}`, { rid });
+    }
 
     let res: Response;
     try {
@@ -325,10 +327,12 @@ class ApiClient {
       throw new ApiError(message, res.status, body);
     }
 
-    console.log(`[api] ← ${res.status} ${path}`, {
-      rid,
-      duration: `${duration}ms`,
-    });
+    if (__DEV__) {
+      console.log(`[api] ← ${res.status} ${path}`, {
+        rid,
+        duration: `${duration}ms`,
+      });
+    }
 
     if (res.status === 204) return undefined as T;
     return (await res.json()) as T;
@@ -458,13 +462,22 @@ class ApiClient {
 
   // --- Notification preferences ---
   async getNotificationPreferences(
-    opts?: { signal?: AbortSignal },
+    opts?: { signal?: AbortSignal; workspaceSlug?: string },
   ): Promise<NotificationPreferenceResponse> {
-    return this.fetchValidated(
+    return this.fetchValidatedWith(
       "/api/notification-preferences",
       NotificationPreferenceResponseSchema,
       EMPTY_NOTIFICATION_PREFERENCES,
-      { ...opts, endpoint: "getNotificationPreferences" },
+      {
+        method: "GET",
+        headers: opts?.workspaceSlug
+          ? { "X-Workspace-Slug": opts.workspaceSlug }
+          : undefined,
+      },
+      {
+        signal: opts?.signal,
+        endpoint: "getNotificationPreferences",
+      },
     );
   }
 
@@ -987,8 +1000,12 @@ class ApiClient {
   // --- Projects ---
   async listProjects(opts?: {
     signal?: AbortSignal;
+    includeArchived?: boolean;
   }): Promise<ListProjectsResponse> {
-    const raw = await this.fetch<unknown>("/api/projects", {
+    const path = opts?.includeArchived
+      ? "/api/projects?include_archived=true"
+      : "/api/projects";
+    const raw = await this.fetch<unknown>(path, {
       signal: opts?.signal,
     });
     return parseWithFallback(
@@ -1145,6 +1162,45 @@ class ApiClient {
     await this.fetch<void>(`/api/chat/sessions/${id}`, { method: "DELETE" });
   }
 
+  async updateChatSessionTitle(
+    id: string,
+    title: string,
+  ): Promise<ChatSession> {
+    const raw = await this.fetch<unknown>(`/api/chat/sessions/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title }),
+    });
+    const parsed = ChatSessionSchema.safeParse(raw);
+    if (!parsed.success) {
+      console.error("[api] ← shape mismatch PATCH /api/chat/sessions/:id", {
+        issues: parsed.error.issues,
+      });
+      throw new ApiError("Update chat session response invalid", 0, raw);
+    }
+    return parsed.data;
+  }
+
+  async setChatSessionArchived(
+    id: string,
+    archived: boolean,
+  ): Promise<ChatSession> {
+    const raw = await this.fetch<unknown>(
+      `/api/chat/sessions/${id}/archive`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ archived }),
+      },
+    );
+    const parsed = ChatSessionSchema.safeParse(raw);
+    if (!parsed.success) {
+      console.error("[api] ← shape mismatch PATCH /api/chat/sessions/:id/archive", {
+        issues: parsed.error.issues,
+      });
+      throw new ApiError("Archive chat session response invalid", 0, raw);
+    }
+    return parsed.data;
+  }
+
   async listChatMessages(
     sessionId: string,
     opts?: { signal?: AbortSignal },
@@ -1164,7 +1220,11 @@ class ApiClient {
   async sendChatMessage(
     sessionId: string,
     content: string,
-    opts?: { attachmentIds?: string[] },
+    opts?: {
+      attachmentIds?: string[];
+      queue?: boolean;
+      submissionId?: string;
+    },
   ): Promise<SendChatMessageResponse> {
     // Strict parse — we need task_id + created_at to anchor the optimistic
     // StatusPill. Fallback would silently break the elapsed-time timer.
@@ -1173,25 +1233,60 @@ class ApiClient {
     // server-side `chat.go` back-fills `chat_message_id` on the listed
     // attachments after the message row is inserted (see
     // server/internal/handler/chat.go:410-456).
-    const body: { content: string; attachment_ids?: string[] } = { content };
+    const body: {
+      content: string;
+      steer: boolean;
+      submission_id?: string;
+      attachment_ids?: string[];
+    } = {
+      content,
+      // The server decides whether steering applies. Queue-capable servers
+      // add plain text to the active reply; older servers ignore this field.
+      steer: opts?.queue !== true,
+      ...(opts?.submissionId ? { submission_id: opts.submissionId } : {}),
+    };
     if (opts?.attachmentIds && opts.attachmentIds.length > 0) {
       body.attachment_ids = opts.attachmentIds;
     }
-    const raw = await this.fetch<unknown>(
-      `/api/chat/sessions/${sessionId}/messages`,
-      {
-        method: "POST",
-        body: JSON.stringify(body),
-      },
-    );
-    const parsed = SendChatMessageResponseSchema.safeParse(raw);
-    if (!parsed.success) {
-      console.error("[api] ← shape mismatch POST /api/chat/sessions/:id/messages", {
-        issues: parsed.error.issues,
-      });
-      throw new ApiError("Send message response invalid", 0, raw);
+
+    const submit = async () => {
+      const raw = await this.fetch<unknown>(
+        `/api/chat/sessions/${sessionId}/messages`,
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+        },
+      );
+      const parsed = SendChatMessageResponseSchema.safeParse(raw);
+      if (!parsed.success) {
+        console.error("[api] ← shape mismatch POST /api/chat/sessions/:id/messages", {
+          issues: parsed.error.issues,
+        });
+        throw new ApiError("Send message response invalid", 0, raw);
+      }
+      return parsed.data;
+    };
+
+    try {
+      return await submit();
+    } catch (err) {
+      // A mobile network can lose the response after the server committed the
+      // turn. Retry once with the same submission UUID so the acceptance
+      // receipt returns the original message and task instead of the user
+      // seeing a failed send that actually ran.
+      const retryable =
+        !!opts?.submissionId &&
+        (err instanceof TypeError ||
+          (err instanceof ApiError &&
+            ((err.status === 0 && err.body === undefined) ||
+              err.status === 502 ||
+              err.status === 503 ||
+              err.status === 504)));
+      if (!retryable) throw err;
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return submit();
     }
-    return parsed.data;
   }
 
   async getPendingChatTask(
@@ -1338,7 +1433,9 @@ class ApiClient {
     if (opts?.issueId) formData.append("issue_id", opts.issueId);
     if (opts?.commentId) formData.append("comment_id", opts.commentId);
 
-    console.log(`[api] → POST ${path}`, { rid, filename: asset.name });
+    if (__DEV__) {
+      console.log(`[api] → POST ${path}`, { rid, filename: asset.name });
+    }
 
     const res = await fetch(`${API_URL}${path}`, {
       method: "POST",
@@ -1367,10 +1464,12 @@ class ApiClient {
       throw new ApiError(message, res.status, body);
     }
 
-    console.log(`[api] ← ${res.status} ${path}`, {
-      rid,
-      duration: `${duration}ms`,
-    });
+    if (__DEV__) {
+      console.log(`[api] ← ${res.status} ${path}`, {
+        rid,
+        duration: `${duration}ms`,
+      });
+    }
 
     // Strict validation: parseWithFallback's silent-fallback pattern doesn't
     // fit here — an attachment without a `url` would be inserted into the

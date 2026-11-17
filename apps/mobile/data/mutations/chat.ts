@@ -60,6 +60,81 @@ export function useDeleteChatSession() {
   });
 }
 
+function sortSessions(sessions: ChatSession[]) {
+  return [...sessions].sort((a, b) => {
+    if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
+    return Date.parse(b.updated_at) - Date.parse(a.updated_at);
+  });
+}
+
+export function useUpdateChatSessionTitle() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceStore((s) => s.currentWorkspaceId);
+
+  return useMutation({
+    mutationFn: (data: { sessionId: string; title: string }) =>
+      api.updateChatSessionTitle(data.sessionId, data.title),
+    onMutate: async ({ sessionId, title }) => {
+      const key = chatKeys.sessions(wsId);
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<ChatSession[]>(key);
+      qc.setQueryData<ChatSession[]>(key, (old) =>
+        old?.map((session) =>
+          session.id === sessionId ? { ...session, title } : session,
+        ),
+      );
+      return { prev, key };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(ctx.key, ctx.prev);
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: chatKeys.sessions(wsId) });
+    },
+  });
+}
+
+export function useSetChatSessionArchived() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceStore((s) => s.currentWorkspaceId);
+
+  return useMutation({
+    mutationFn: (data: { sessionId: string; archived: boolean }) =>
+      api.setChatSessionArchived(data.sessionId, data.archived),
+    onMutate: async ({ sessionId, archived }) => {
+      const key = chatKeys.sessions(wsId);
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<ChatSession[]>(key);
+      const now = new Date().toISOString();
+      qc.setQueryData<ChatSession[]>(key, (old) =>
+        old
+          ? sortSessions(
+              old.map((session) =>
+                session.id === sessionId
+                  ? {
+                      ...session,
+                      status: archived ? "archived" : "active",
+                      updated_at: now,
+                      ...(archived
+                        ? { unread_count: 0, has_unread: false }
+                        : {}),
+                    }
+                  : session,
+              ),
+            )
+          : old,
+      );
+      return { prev, key };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(ctx.key, ctx.prev);
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: chatKeys.sessions(wsId) });
+    },
+  });
+}
+
 export function useMarkChatSessionRead() {
   const qc = useQueryClient();
   const wsId = useWorkspaceStore((s) => s.currentWorkspaceId);

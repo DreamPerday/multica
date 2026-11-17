@@ -51,6 +51,7 @@ import { useIssueStatuses } from "@/lib/use-issue-statuses";
 import { groupIssuesByStatus } from "@/lib/group-issues-by-status";
 import { filterIssues } from "@/lib/filter-issues";
 import { useColorScheme } from "@/lib/use-color-scheme";
+import { useManualRefresh } from "@/lib/use-manual-refresh";
 import { THEME } from "@/lib/theme";
 
 // Scope tab definitions. Mirrors web `issuesScopeStore`. Counts are NOT
@@ -83,9 +84,10 @@ export default function IssuesPage() {
     wsId,
   );
 
-  const { data, isLoading, error, refetch, isRefetching } = useQuery(
+  const { data, isLoading, error, refetch } = useQuery(
     issueListOptions(wsId),
   );
+  const { refreshing, onRefresh } = useManualRefresh(refetch);
 
   // Only the active-filter chips need the catalog — sections group on the
   // category the server already resolved onto each issue. (MUL-6243)
@@ -188,8 +190,8 @@ export default function IssuesPage() {
               }}
             />
           )}
-          refreshing={isRefetching}
-          onRefresh={refetch}
+          refreshing={refreshing}
+          onRefresh={onRefresh}
         />
       )}
     </View>

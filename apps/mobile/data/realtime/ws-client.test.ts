@@ -48,9 +48,135 @@ function connectAuthenticatedClient() {
   client.connect();
   const socket = MockWebSocket.instances[0];
   socket.open();
+  vi.advanceTimersByTime(250);
   socket.receive({ type: "auth_ack" });
   return { client, socket };
 }
+
+describe("WSClient Android auth delivery", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    MockWebSocket.instances = [];
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("defers the first auth write until the native socket is ready to flush", () => {
+    const client = new WSClient({
+      url: "wss://example.test/ws",
+      token: "token",
+      workspaceSlug: "workspace",
+    });
+
+    client.connect();
+    const socket = MockWebSocket.instances[0];
+    socket.open();
+
+    expect(socket.sent).toHaveLength(0);
+    vi.advanceTimersByTime(249);
+    expect(socket.sent).toHaveLength(0);
+    vi.advanceTimersByTime(1);
+    expect(socket.sent.map((frame) => JSON.parse(frame))).toEqual([
+      { type: "auth", payload: { token: "token" } },
+    ]);
+
+    client.disconnect();
+  });
+
+  it("retries auth until the server acknowledges it", () => {
+    const client = new WSClient({
+      url: "wss://example.test/ws",
+      token: "token",
+      workspaceSlug: "workspace",
+    });
+
+    client.connect();
+    const socket = MockWebSocket.instances[0];
+    socket.open();
+
+    vi.advanceTimersByTime(5_000);
+    expect(socket.sent).toHaveLength(4);
+    expect(
+      socket.sent.map((frame) => JSON.parse(frame)),
+    ).toEqual(
+      Array.from({ length: 4 }, () => ({
+        type: "auth",
+        payload: { token: "token" },
+      })),
+    );
+
+    client.disconnect();
+  });
+
+  it("cancels pending auth retries after auth_ack arrives", () => {
+    const client = new WSClient({
+      url: "wss://example.test/ws",
+      token: "token",
+      workspaceSlug: "workspace",
+    });
+
+    client.connect();
+    const socket = MockWebSocket.instances[0];
+    socket.open();
+    vi.advanceTimersByTime(250);
+    socket.receive({ type: "auth_ack" });
+    vi.advanceTimersByTime(5_000);
+
+    expect(socket.sent.map((frame) => JSON.parse(frame))).toEqual([
+      { type: "auth", payload: { token: "token" } },
+      { type: "ping" },
+    ]);
+
+    client.disconnect();
+  });
+
+  it("reports authentication only after auth_ack", () => {
+    const client = new WSClient({
+      url: "wss://example.test/ws",
+      token: "token",
+      workspaceSlug: "workspace",
+    });
+
+    client.connect();
+    const socket = MockWebSocket.instances[0];
+    socket.open();
+    expect(client.isAuthenticated()).toBe(false);
+
+    socket.receive({ type: "auth_ack" });
+    expect(client.isAuthenticated()).toBe(true);
+
+    socket.close();
+    expect(client.isAuthenticated()).toBe(false);
+
+    client.disconnect();
+  });
+
+  it("backs off instead of immediately redialing after auth timeout", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const client = new WSClient({
+      url: "wss://example.test/ws",
+      token: "token",
+      workspaceSlug: "workspace",
+    });
+
+    client.connect();
+    const socket = MockWebSocket.instances[0];
+    socket.open();
+
+    vi.advanceTimersByTime(10_000);
+    expect(MockWebSocket.instances).toHaveLength(1);
+
+    vi.advanceTimersByTime(1_000);
+    expect(MockWebSocket.instances).toHaveLength(2);
+
+    client.disconnect();
+  });
+});
 
 describe("WSClient application heartbeat", () => {
   beforeEach(() => {
@@ -98,11 +224,13 @@ describe("WSClient application heartbeat", () => {
 // the token captured when this client was built is on its way out (MUL-7436).
 describe("WSClient session renewal", () => {
   beforeEach(() => {
+    vi.useFakeTimers();
     vi.stubGlobal("WebSocket", MockWebSocket);
     MockWebSocket.instances = [];
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -118,6 +246,7 @@ describe("WSClient session renewal", () => {
 
     client.connect();
     MockWebSocket.instances[0].open();
+    vi.advanceTimersByTime(250);
     expect(JSON.parse(MockWebSocket.instances[0].sent[0])).toEqual({
       type: "auth",
       payload: { token: "token-v1" },
@@ -127,11 +256,13 @@ describe("WSClient session renewal", () => {
     client.forceReconnect();
     const reconnected = MockWebSocket.instances[MockWebSocket.instances.length - 1];
     reconnected.open();
+    vi.advanceTimersByTime(250);
 
     expect(JSON.parse(reconnected.sent[0])).toEqual({
       type: "auth",
       payload: { token: "token-v2" },
     });
+    client.disconnect();
   });
 
   it("falls back to the constructor token when no reader is supplied", () => {
@@ -143,11 +274,13 @@ describe("WSClient session renewal", () => {
 
     client.connect();
     MockWebSocket.instances[0].open();
+    vi.advanceTimersByTime(250);
 
     expect(JSON.parse(MockWebSocket.instances[0].sent[0])).toEqual({
       type: "auth",
       payload: { token: "token-only" },
     });
+    client.disconnect();
   });
 });
 
@@ -222,6 +355,7 @@ describe("WSClient foreground recovery", () => {
     expect(onReconnect).not.toHaveBeenCalled();
     const resumed = MockWebSocket.instances[1];
     resumed.open();
+    vi.advanceTimersByTime(250);
     resumed.receive({ type: "auth_ack" });
     resumed.receive({ type: "pong" });
     expect(onReconnect).toHaveBeenCalledTimes(1);

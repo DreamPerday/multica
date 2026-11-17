@@ -5,13 +5,9 @@
  * supports `listeners.tabPress + e.preventDefault()`, the canonical RN
  * pattern for tab-as-action.
  *
- * The "More" tab is **not a navigation target** — its press opens a
- * DropdownMenu popover anchored above the tab. The popover is rendered
- * by `<MoreTabDropdownAnchor />` as a sibling of `<Tabs>`, NOT as a
- * `tabBarButton` replacement: keeping the real tab button intact means
- * the icon + "More" label render identically to the other three tabs.
- * We just open the dropdown imperatively from `listeners.tabPress` via
- * the exposed `TriggerRef.open()`.
+ * The "More" tab is **not a navigation target** — its real tab button is
+ * supplied by `<MoreTabButton />`, which opens a native Modal menu. The
+ * tab layout prevents navigation to the stub route.
  *
  * The stub (tabs)/more.tsx file still exists only because expo-router
  * requires every Tabs.Screen to have a backing route file — the press
@@ -20,11 +16,8 @@
  * Active / inactive tint colors are derived from the current colour
  * scheme via THEME so dark mode picks contrasting values automatically.
  */
-import { useRef } from "react";
 import { Tabs } from "expo-router";
 import { PlatformIcon } from "@/components/ui/platform-icon";
-import { View } from "react-native";
-import type { TriggerRef } from "@rn-primitives/dropdown-menu";
 import { useWorkspaceStore } from "@/data/workspace-store";
 import { useColorScheme } from "@/lib/use-color-scheme";
 import { THEME } from "@/lib/theme";
@@ -32,7 +25,7 @@ import {
   useInboxUnreadCount,
   useChatUnreadMessageCount,
 } from "@/lib/unread-counts";
-import { MoreTabDropdownAnchor } from "@/components/nav/more-tab-dropdown";
+import { MoreTabButton } from "@/components/nav/more-tab-dropdown";
 import { useT } from "@/lib/i18n";
 
 // Only override backgroundColor — @react-navigation/elements Badge internally
@@ -60,14 +53,8 @@ export default function TabsLayout() {
   const chatBadge =
     chatUnread > 0 ? (chatUnread > 99 ? "99+" : String(chatUnread)) : undefined;
 
-  // Imperative handle into the More tab's dropdown — listeners.tabPress
-  // calls .open(); the @rn-primitives Trigger measures itself inside
-  // open() so the popover anchors to MoreTabDropdownAnchor's rect.
-  const moreTriggerRef = useRef<TriggerRef>(null);
-
   return (
-    <View style={{ flex: 1 }}>
-      <Tabs
+    <Tabs
         screenOptions={{
           headerShown: false,
           tabBarActiveTintColor: theme.foreground,
@@ -134,21 +121,12 @@ export default function TabsLayout() {
                 color={color}
               />
             ),
+            tabBarButton: (props) => <MoreTabButton {...props} />,
           }}
           listeners={() => ({
-            tabPress: (e) => {
-              // Don't navigate to the (stub) /more screen — open the
-              // dropdown popover instead. The trigger is invisible and
-              // mounted in MoreTabDropdownAnchor below; ref.open() also
-              // measures its rect so the popover anchors correctly.
-              e.preventDefault();
-              moreTriggerRef.current?.open();
-            },
+            tabPress: (event) => event.preventDefault(),
           })}
         />
-      </Tabs>
-
-      <MoreTabDropdownAnchor triggerRef={moreTriggerRef} />
-    </View>
+    </Tabs>
   );
 }

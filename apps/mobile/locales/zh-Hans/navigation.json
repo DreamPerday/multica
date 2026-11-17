@@ -10,6 +10,8 @@
     "pinned": "已固定",
     "issues": "任务",
     "projects": "项目",
+    "agents": "智能体",
+    "settings": "设置",
     "account_settings": "账号设置"
   },
   "routes": {

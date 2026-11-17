@@ -15,7 +15,14 @@
     "title": "智能体",
     "empty": "还没有智能体",
     "search_placeholder": "搜索智能体...",
-    "coming_soon": "智能体功能即将上线。"
+    "coming_soon": "智能体功能即将上线。",
+    "no_matches": "没有匹配的智能体。",
+    "load_failed": "智能体加载失败：{{message}}",
+    "online": "在线",
+    "offline": "离线",
+    "reconnecting": "重连中",
+    "needs_runtime": "需要运行时",
+    "checking": "检测中"
   },
   "actions": {
     "retry": "重试",

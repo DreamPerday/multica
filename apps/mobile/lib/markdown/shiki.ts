@@ -16,10 +16,9 @@
  *     degrades to plain monospace text — never crashes.
  *
  * Boot path:
- *   `prewarmHighlighter()` from app/_layout.tsx fires the init promise
- *   during app start, so by the time the user opens an issue with a code
- *   block, the highlighter is usually ready and there's no first-paint
- *   "plain → highlighted" flash.
+ *   The heavy grammar bundle stays out of the root route. CodeBlock loads
+ *   this module dynamically the first time an actual fenced code block is
+ *   rendered, then all later blocks reuse the singleton promise.
  */
 import {
   createHighlighterCore,

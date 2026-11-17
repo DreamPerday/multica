@@ -92,8 +92,12 @@ const HEARTBEAT_TIMEOUT_MS = 10_000;
  */
 const AUTH_TIMEOUT_MS = 10_000;
 
-/** Re-send the auth frame once if the ack has not arrived by then. */
-const AUTH_RESEND_MS = 1_000;
+/**
+ * Retry the auth frame until the server acknowledges it. React Native's
+ * Android WebSocket can acknowledge `onopen` before the native transport is
+ * ready to flush application data; retrying once was not enough on Android 16.
+ */
+const AUTH_RESEND_DELAYS_MS = [250, 1_000, 2_500, 5_000] as const;
 
 /**
  * Lifecycle state — drives whether onclose schedules a reconnect:
@@ -113,7 +117,7 @@ export class WSClient {
   private pongTimer: ReturnType<typeof setTimeout> | null = null;
   private awaitingPong = false;
   private authTimer: ReturnType<typeof setTimeout> | null = null;
-  private authRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private authRetryTimers: ReturnType<typeof setTimeout>[] = [];
   private authenticated = false;
   private hasConnectedBefore = false;
 
@@ -214,6 +218,11 @@ export class WSClient {
     };
   }
 
+  /** True only while the server has acknowledged this live socket. */
+  isAuthenticated() {
+    return this.authenticated && this.ws?.readyState === WebSocket.OPEN;
+  }
+
   send(message: WSMessage) {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(message));
@@ -247,19 +256,24 @@ export class WSClient {
         readyState: ws.readyState,
       });
       this.authenticated = false;
-      this.sendAuthFrame(ws, token);
-      // Android occasionally loses the frame written from inside `onopen` — the
-      // server then waits for a first frame that never arrives, answering with
-      // neither an ack nor an error, and the connection looks healthy forever.
-      // Re-sending before the watchdog fires turns that into a recoverable
-      // hiccup instead of a dead socket.
-      this.clearAuthRetryTimer();
-      this.authRetryTimer = setTimeout(() => {
-        this.authRetryTimer = null;
-        if (this.ws !== ws || this.authenticated) return;
-        this.logger.warn("[ws] no auth_ack after retry, re-sending auth frame");
-        this.sendAuthFrame(ws, this.opts.getToken?.() ?? this.opts.token);
-      }, AUTH_RESEND_MS);
+      this.clearAuthRetryTimers();
+      // Defer the first write by one native event-loop turn. Writing directly
+      // from `onopen` intermittently produced an empty native send on Android.
+      this.authRetryTimers = AUTH_RESEND_DELAYS_MS.map((delay, index) =>
+        setTimeout(() => {
+          if (this.ws !== ws || this.authenticated) return;
+          const currentToken = this.opts.getToken?.() ?? token;
+          const bufferedAmount =
+            typeof ws.bufferedAmount === "number" ? ws.bufferedAmount : -1;
+          this.logger.info("[ws] sending auth frame", {
+            attempt: index + 1,
+            delayMs: delay,
+            bufferedAmount,
+            readyState: ws.readyState,
+          });
+          this.sendAuthFrame(ws, currentToken);
+        }, delay),
+      );
       // The socket is useless until auth_ack arrives; see AUTH_TIMEOUT_MS.
       this.clearAuthTimer();
       this.authTimer = setTimeout(() => {
@@ -268,7 +282,7 @@ export class WSClient {
         this.logger.warn(
           "[ws] no auth_ack within timeout, reconnecting",
         );
-        this.forceReconnect();
+        this.reconnectAfterAuthFailure();
       }, AUTH_TIMEOUT_MS);
     };
 
@@ -331,7 +345,7 @@ export class WSClient {
       this.ws = null;
       this.authenticated = false;
       this.clearAuthTimer();
-      this.clearAuthRetryTimer();
+      this.clearAuthRetryTimers();
       this.clearHeartbeat();
       this.logger.warn("[ws] socket closed");
       if (this.state === "active") this.scheduleReconnect();
@@ -342,7 +356,7 @@ export class WSClient {
     this.reconnectAttempt = 0;
     this.authenticated = true;
     this.clearAuthTimer();
-    this.clearAuthRetryTimer();
+    this.clearAuthRetryTimers();
     this.logger.info("[ws] authenticated");
     this.startHeartbeat();
     if (this.hasConnectedBefore) {
@@ -389,11 +403,11 @@ export class WSClient {
     }
   }
 
-  private clearAuthRetryTimer() {
-    if (this.authRetryTimer) {
-      clearTimeout(this.authRetryTimer);
-      this.authRetryTimer = null;
+  private clearAuthRetryTimers() {
+    for (const timer of this.authRetryTimers) {
+      clearTimeout(timer);
     }
+    this.authRetryTimers = [];
   }
 
   private sendAuthFrame(ws: WebSocket, token: string | null | undefined) {
@@ -450,6 +464,18 @@ export class WSClient {
       this.pongTimer = null;
     }
     this.logger.debug("[ws] heartbeat pong");
+  }
+
+  private reconnectAfterAuthFailure() {
+    if (this.state !== "active") return;
+    this.clearAuthTimer();
+    this.clearAuthRetryTimers();
+    this.teardownSocket();
+    // Authentication failures are retried through the normal exponential
+    // backoff. REST polling covers UI freshness while this connection is
+    // unusable, so repeatedly resetting backoff and redialing every timeout
+    // only wastes battery and floods logs.
+    this.scheduleReconnect();
   }
 
   private reconnectAfterHeartbeatFailure() {
