@@ -22,10 +22,13 @@ import type {
 import type { AgentAvailability } from "@multica/core/agents";
 import { continuousCorners } from "@/lib/radius";
 import { taskMessagesOptions } from "@/data/queries/chat";
+import { THEME } from "@/lib/theme";
+import { useColorScheme } from "@/lib/use-color-scheme";
 import { Text } from "@/components/ui/text";
 import { Markdown } from "@/lib/markdown";
 import { ImageSequenceProvider } from "@/lib/markdown/image-sequence";
 import { failureReasonKey } from "@/lib/failure-reason-label";
+import type { QueuedChatMessage } from "@/lib/chat-queued-messages";
 import { formatElapsedMs } from "@/lib/format-elapsed";
 import { cn } from "@/lib/utils";
 import { useChatSelectStore } from "@/data/chat-select-store";
@@ -66,6 +69,8 @@ interface Props {
   /** Live timeline rows for the in-flight task. Already fetched by the
    *  parent so this list doesn't have to manage its own subscription. */
   liveTaskMessages?: TaskMessagePayload[];
+  /** Follow-ups waiting for their turn, rendered after the live reply. */
+  queuedMessages?: QueuedChatMessage[];
   /** Resolved availability — drives the StatusPill's "Offline" /
    *  "Reconnecting" stages. Pass `undefined` while loading. */
   availability?: AgentAvailability;
@@ -81,6 +86,7 @@ export function ChatMessageList({
   quickActionsDisabled = false,
   pendingTask,
   liveTaskMessages,
+  queuedMessages = [],
   availability,
 }: Props) {
   // Top-level selection subscription gates the outer "tap-outside-to-dismiss"
@@ -179,16 +185,21 @@ export function ChatMessageList({
       )}
       ItemSeparatorComponent={MessageSeparator}
       ListFooterComponent={
-        showLiveSection ? (
+        showLiveSection || queuedMessages.length > 0 ? (
           <View style={{ paddingTop: 12 }} className="gap-2">
             {showLiveTimeline ? (
               <ChatTimeline items={liveTaskMessages ?? []} isStreaming />
             ) : null}
-            <StatusPill
-              pendingTask={pendingTask}
-              taskMessages={liveTaskMessages}
-              availability={availability}
-            />
+            {showLiveSection ? (
+              <StatusPill
+                pendingTask={pendingTask}
+                taskMessages={liveTaskMessages}
+                availability={availability}
+              />
+            ) : null}
+            {queuedMessages.map((row) => (
+              <QueuedMessageRow key={row.task_id} message={row} />
+            ))}
           </View>
         ) : null
       }
@@ -229,6 +240,46 @@ export function ChatMessageList({
 
 function MessageSeparator() {
   return <View style={{ height: 12 }} />;
+}
+
+/**
+ * A follow-up waiting for its turn. It stays visually distinct from the
+ * completed transcript and gets its timestamp row outside the bubble so
+ * wrapping content can grow without covering the status.
+ */
+function QueuedMessageRow({ message }: { message: QueuedChatMessage }) {
+  const { t } = useT("chat");
+  const { colorScheme } = useColorScheme();
+  return (
+    <View className="self-end max-w-[80%] items-end gap-1 opacity-60">
+      <View
+        className="gap-1.5 rounded-xl border-2 border-transparent bg-muted px-3.5 py-2"
+        style={continuousCorners}
+      >
+        {message.content.trim() ? (
+          <Markdown
+            content={message.content}
+            attachments={message.attachments}
+            compact
+          />
+        ) : null}
+        <CommentAttachmentList
+          attachments={message.attachments}
+          content={message.content}
+        />
+      </View>
+      <View className="flex-row items-center gap-1 px-1 pt-0.5">
+        <Ionicons
+          name="time-outline"
+          size={12}
+          color={THEME[colorScheme].mutedForeground}
+        />
+        <Text className="text-xs text-muted-foreground">
+          {t("status.queued")}
+        </Text>
+      </View>
+    </View>
+  );
 }
 
 function MessageRow({
@@ -356,8 +407,8 @@ function AssistantRow({
   // "Replied in".
   const isNoResponse = message.message_kind === "no_response";
   const { t } = useT("chat");
-  const body = (
-    <View className="gap-1.5">
+  const content = (
+    <View className="min-w-0 gap-1.5">
       {timeline.length > 0 ? (
         <ChatTimeline items={timeline} />
       ) : null}
@@ -380,25 +431,31 @@ function AssistantRow({
         attachments={message.attachments}
         content={message.content}
       />
-      {message.elapsed_ms != null ? (
-        <ElapsedCaption
-          variant={isNoResponse ? "finished" : "replied"}
-          elapsedMs={message.elapsed_ms}
-        />
-      ) : null}
     </View>
   );
-  const messageBody = isSelecting ? body : (
+  const messageBody = isSelecting ? content : (
     <Pressable onLongPress={longPress.onLongPress} delayLongPress={500}>
-      {body}
+      {content}
     </Pressable>
   );
+  const elapsedCaption = message.elapsed_ms != null ? (
+    <ElapsedCaption
+      variant={isNoResponse ? "finished" : "replied"}
+      elapsedMs={message.elapsed_ms}
+    />
+  ) : null;
   if (!onQuickAction || (message.quick_actions?.length ?? 0) === 0) {
-    return messageBody;
+    return (
+      <View className="min-w-0 gap-1.5">
+        {messageBody}
+        {elapsedCaption}
+      </View>
+    );
   }
   return (
-    <View className="gap-2">
+    <View className="min-w-0 gap-2">
       {messageBody}
+      {elapsedCaption}
       <QuickActions
         actions={message.quick_actions ?? []}
         disabled={quickActionsDisabled}
@@ -490,7 +547,9 @@ function ElapsedCaption({
         ? t("elapsed.finished", { time: formatElapsedMs(elapsedMs) })
         : t("elapsed.failed", { time: formatElapsedMs(elapsedMs) });
   return (
-    <Text className="text-xs text-muted-foreground/80 mt-1">{label}</Text>
+    <View className="pt-0.5">
+      <Text className="text-xs text-muted-foreground/80">{label}</Text>
+    </View>
   );
 }
 

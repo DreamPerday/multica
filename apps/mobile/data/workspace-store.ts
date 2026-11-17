@@ -1,7 +1,7 @@
 /**
  * Mobile workspace store — Zustand. Holds the active workspace (id + slug)
- * and persists the slug to SecureStore so cold starts restore the last
- * selection without re-prompting.
+ * and persists the id + slug to SecureStore so cold starts can render and
+ * issue workspace-scoped requests while membership is revalidated.
  *
  * The route is the source of truth for which workspace is active
  * (`/[workspace]/...` URL segment, set by the layout that reads
@@ -18,12 +18,14 @@ import { create } from "zustand";
 import * as SecureStore from "expo-secure-store";
 
 const SLUG_KEY = "multica_current_workspace_slug";
+const ID_KEY = "multica_current_workspace_id";
 
 interface WorkspaceState {
   currentWorkspaceId: string | null;
   currentWorkspaceSlug: string | null;
   /** Set the active workspace and persist the slug (id is in-memory only —
-   *  it's resolved from the workspaces list query, not stored). */
+   *  both id and slug are cached so the authenticated shell and workspace
+   *  queries can start before the workspaces list finishes validating). */
   setCurrentWorkspace: (id: string, slug: string) => Promise<void>;
   /** Restore the slug from SecureStore on cold start. id stays null until
    *  the workspaces list query resolves. */
@@ -37,18 +39,32 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
 
   setCurrentWorkspace: async (id, slug) => {
     set({ currentWorkspaceId: id, currentWorkspaceSlug: slug });
-    await SecureStore.setItemAsync(SLUG_KEY, slug);
+    await Promise.all([
+      SecureStore.setItemAsync(SLUG_KEY, slug),
+      SecureStore.setItemAsync(ID_KEY, id),
+    ]);
   },
 
   restoreSlug: async () => {
-    const slug = await SecureStore.getItemAsync(SLUG_KEY);
-    if (slug) set({ currentWorkspaceSlug: slug });
+    const [slug, id] = await Promise.all([
+      SecureStore.getItemAsync(SLUG_KEY),
+      SecureStore.getItemAsync(ID_KEY),
+    ]);
+    if (slug) {
+      set({
+        currentWorkspaceSlug: slug,
+        currentWorkspaceId: id,
+      });
+    }
     return slug;
   },
 
   clear: async () => {
     set({ currentWorkspaceId: null, currentWorkspaceSlug: null });
-    await SecureStore.deleteItemAsync(SLUG_KEY);
+    await Promise.all([
+      SecureStore.deleteItemAsync(SLUG_KEY),
+      SecureStore.deleteItemAsync(ID_KEY),
+    ]);
   },
 }));
 

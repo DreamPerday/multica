@@ -15,7 +15,14 @@
     "coming_soon": "Agents coming soon.",
     "title": "Agents",
     "empty": "No agents yet",
-    "search_placeholder": "Search agents..."
+    "search_placeholder": "Search agents...",
+    "no_matches": "No matching agents.",
+    "load_failed": "Failed to load agents: {{message}}",
+    "online": "Online",
+    "offline": "Offline",
+    "reconnecting": "Reconnecting",
+    "needs_runtime": "Needs runtime",
+    "checking": "Checking"
   },
   "actions": {
     "retry": "Retry",

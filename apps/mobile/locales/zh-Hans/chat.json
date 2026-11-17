@@ -20,7 +20,8 @@
     "file_too_large_title": "文件过大",
     "file_too_large_message": "文件必须小于 100 MB。",
     "working": "智能体正在处理...",
-    "message": "消息..."
+    "message": "消息...",
+    "queue": "排到下一轮"
   },
   "empty": {
     "greeting": "你好，我是 {{name}}",
@@ -103,6 +104,20 @@
     "empty": "还没有聊天。",
     "archived": "已归档",
     "new_chat": "新建聊天"
+  },
+  "session_actions": {
+    "rename": "重命名",
+    "agent_settings": "智能体设置",
+    "archive": "归档",
+    "unarchive": "取消归档",
+    "delete": "删除",
+    "rename_title": "重命名聊天",
+    "rename_placeholder": "输入聊天名称",
+    "save": "保存",
+    "saving": "保存中...",
+    "rename_failed": "无法重命名聊天",
+    "archive_failed": "无法更新归档状态",
+    "session_missing": "该聊天已不存在。"
   },
   "picker.title": "选择智能体",
   "no_response": "本轮已结束，智能体没有返回文字回复。",

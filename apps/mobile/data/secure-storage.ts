@@ -22,6 +22,7 @@ import * as SecureStore from "expo-secure-store";
 import { sessionEpochChanged } from "./session-epoch";
 
 const TOKEN_KEY = "multica_token";
+const USER_CACHE_KEY = "multica_current_user";
 
 // Tail of the write queue. Each operation chains onto the previous one so no
 // two can be in flight at once; failures do not stall the queue.
@@ -42,7 +43,24 @@ export async function setToken(token: string): Promise<void> {
 }
 
 export async function clearToken(): Promise<void> {
-  await serialize(() => SecureStore.deleteItemAsync(TOKEN_KEY));
+  await serialize(async () => {
+    await Promise.all([
+      SecureStore.deleteItemAsync(TOKEN_KEY),
+      SecureStore.deleteItemAsync(USER_CACHE_KEY),
+    ]);
+  });
+}
+
+export async function getCachedUserJson(): Promise<string | null> {
+  return SecureStore.getItemAsync(USER_CACHE_KEY);
+}
+
+export async function setCachedUserJson(value: string): Promise<void> {
+  await serialize(() => SecureStore.setItemAsync(USER_CACHE_KEY, value));
+}
+
+export async function clearCachedUser(): Promise<void> {
+  await serialize(() => SecureStore.deleteItemAsync(USER_CACHE_KEY));
 }
 
 /**

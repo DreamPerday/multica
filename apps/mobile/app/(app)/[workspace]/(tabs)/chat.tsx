@@ -33,11 +33,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
-  KeyboardAvoidingView,
-  Platform,
   View,
 } from "react-native";
-import { router, useFocusEffect, useIsFocused } from "expo-router";
+import { KeyboardAvoidingView } from "react-native-keyboard-controller";
+import {
+  router,
+  useFocusEffect,
+  useIsFocused,
+  useLocalSearchParams,
+} from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   Agent,
@@ -67,6 +71,7 @@ import {
   useCreateChatSession,
   useDeleteChatSession,
   useMarkChatSessionRead,
+  useSetChatSessionArchived,
 } from "@/data/mutations/chat";
 import {
   DRAFT_NEW_SESSION,
@@ -76,15 +81,18 @@ import { useChatSessionPickerStore } from "@/data/stores/chat-session-picker-sto
 import { useChatSessionRealtime } from "@/data/realtime/use-chat-session-realtime";
 import {
   invalidatePendingTask,
-  seedAcceptedPendingTask,
+  reconcileAcceptedChatSend,
 } from "@/data/realtime/chat-ws-updaters";
 import { useWorkspaceAgentAvailability } from "@/lib/workspace-agent-availability";
+import { queuedChatMessages } from "@/lib/chat-queued-messages";
+import { createClientUuid } from "@/lib/client-id";
 import {
   dispatchReasonCode,
 } from "@/lib/dispatch-reason";
 import { useT } from "@/lib/i18n";
 import { useAgentPresence } from "@/lib/use-agent-presence";
 import { Header } from "@/components/ui/header";
+import { showActionSheetWithOptions } from "@/components/ui/action-sheet";
 import { ChatTitleButton } from "@/components/chat/chat-title-button";
 import { ChatSessionActions } from "@/components/chat/chat-session-actions";
 import { ChatMessageList } from "@/components/chat/chat-message-list";
@@ -116,10 +124,25 @@ export default function ChatTab() {
   const wsId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const wsSlug = useWorkspaceStore((s) => s.currentWorkspaceSlug);
   const userId = useAuthStore((s) => s.user?.id);
+  const {
+    agent: requestedAgentId,
+    agentRequest,
+    session: requestedSessionId,
+  } = useLocalSearchParams<{
+    agent?: string;
+    agentRequest?: string;
+    session?: string;
+  }>();
 
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
+  const [appliedAgentRequest, setAppliedAgentRequest] = useState<string | null>(
+    null,
+  );
+  const [appliedSessionRequest, setAppliedSessionRequest] = useState<
+    string | null
+  >(null);
 
   // Bridge to the chat-sessions formSheet route. Mirror local
   // activeSessionId into the store so the picker can render the current
@@ -149,6 +172,15 @@ export default function ChatTab() {
     setHydratedWs(wsId);
     if (sessions.length > 0) setActiveSessionId(sessions[0].id);
   }
+  if (
+    requestedSessionId &&
+    requestedSessionId !== appliedSessionRequest &&
+    sessions.some((session) => session.id === requestedSessionId)
+  ) {
+    setAppliedSessionRequest(requestedSessionId);
+    setSelectedAgentId(null);
+    setActiveSessionId(requestedSessionId);
+  }
   const { data: messages = [], isLoading: messagesLoading } = useQuery(
     chatMessagesOptions(activeSessionId),
   );
@@ -156,6 +188,7 @@ export default function ChatTab() {
     pendingChatTaskOptions(activeSessionId),
   );
   const visibleMessages = hideQueuedChatMessages(messages, pendingTask);
+  const queuedMessages = queuedChatMessages(pendingTask, messages);
   // Live execution trace for the in-flight task. `task:message` WS events
   // append rows to this same cache key via `appendTaskMessage`, so the
   // list/pill stay in sync without a polling fetch. `enabled` is gated by
@@ -186,6 +219,21 @@ export default function ChatTab() {
       ),
     [agents, userId, memberRole],
   );
+
+  // The More → Agents screen can open this tab with a specific agent. Treat
+  // that deep link as starting a fresh conversation with the selected agent.
+  const requestedAgentKey = requestedAgentId
+    ? `${requestedAgentId}:${agentRequest ?? requestedAgentId}`
+    : null;
+  if (
+    requestedAgentId &&
+    requestedAgentKey !== appliedAgentRequest &&
+    availableAgents.some((agent) => agent.id === requestedAgentId)
+  ) {
+    setAppliedAgentRequest(requestedAgentKey);
+    setSelectedAgentId(requestedAgentId);
+    setActiveSessionId(null);
+  }
 
   const activeSession = useMemo(
     () => sessions.find((s) => s.id === activeSessionId) ?? null,
@@ -260,6 +308,7 @@ export default function ChatTab() {
   // ── Mutations ──────────────────────────────────────────────────────────
   const createSession = useCreateChatSession();
   const deleteSession = useDeleteChatSession();
+  const setSessionArchived = useSetChatSessionArchived();
 
   // ── Send burst ─────────────────────────────────────────────────────────
   const sessionPromiseRef = useRef<Promise<string | null> | null>(null);
@@ -292,7 +341,7 @@ export default function ChatTab() {
     async (
       content: string,
       attachmentIds: string[] = [],
-      options: { clearDraft?: boolean } = {},
+      options: { clearDraft?: boolean; queue?: boolean } = {},
     ) => {
       if (!currentAgent) return;
       // Invoke permission was revoked while this session was open — the server
@@ -360,35 +409,22 @@ export default function ChatTab() {
       }
 
       try {
+        const submissionId = createClientUuid();
         const result = await api.sendChatMessage(sessionId, content, {
           attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+          queue: options.queue,
+          submissionId,
         });
         // Replace the local bubble before reconciling pending state. When the
         // server says this is a follow-up, its real message id lets the shared
         // queue filter hide it immediately instead of waiting for the refetch.
-        qc.setQueryData<ChatMessage[]>(chatKeys.messages(sessionId), (old) =>
-          old?.map((message) =>
-            message.id === optimistic.id
-              ? {
-                  ...message,
-                  id: result.message_id,
-                  task_id: result.task_id,
-                  created_at: result.created_at,
-                }
-              : message,
-          ),
-        );
-        seedAcceptedPendingTask(qc, {
+        reconcileAcceptedChatSend(qc, {
           chat_session_id: sessionId,
-          task_id: result.task_id,
-          created_at: result.created_at,
-          message_id: result.message_id,
-          content,
+          optimistic_message_id: optimistic.id,
           optimistic_task_id: optimisticTaskId,
-          supports_queue: result.supports_queue,
-          queued: result.queued,
+          content,
+          result,
         });
-        qc.invalidateQueries({ queryKey: chatKeys.messages(sessionId) });
         // This send just committed the new session's server-derived title.
         if (isNewSession) {
           void refetchChatSessionsAfterCommit(qc, chatKeys.sessions(wsId));
@@ -469,7 +505,7 @@ export default function ChatTab() {
     if (selectRequest && selectRequest === appliedSelect) consumeSelect();
   }, [selectRequest, appliedSelect, consumeSelect]);
 
-  const handleDeleteActive = useCallback(() => {
+  const confirmDeleteActive = useCallback(() => {
     if (!activeSession) return;
     Alert.alert(
       t("alerts.delete_title"),
@@ -489,6 +525,105 @@ export default function ChatTab() {
       { cancelable: true },
     );
   }, [activeSession, deleteSession, t]);
+
+  const handleSessionActions = useCallback(() => {
+    if (!activeSession) return;
+
+    const archived = activeSession.status === "archived";
+    const actions = ["cancel", "rename"];
+    if (currentAgent) actions.push("agent_settings");
+    actions.push(archived ? "unarchive" : "archive");
+    if (archived) actions.push("delete");
+
+    const options = actions.map((action) =>
+      action === "cancel"
+        ? t("common:actions.cancel")
+        : action === "rename"
+          ? t("session_actions.rename")
+          : action === "agent_settings"
+            ? t("session_actions.agent_settings")
+            : action === "unarchive"
+              ? t("session_actions.unarchive")
+              : action === "archive"
+                ? t("session_actions.archive")
+                : t("session_actions.delete"),
+    );
+
+    showActionSheetWithOptions(
+      {
+        title: activeSession.title || t("sessions.new_chat"),
+        options,
+        cancelButtonIndex: 0,
+        destructiveButtonIndex: archived
+          ? actions.indexOf("delete")
+          : undefined,
+      },
+      (index) => {
+        const action = actions[index];
+        if (action === "rename") {
+          if (!wsSlug) return;
+          setTimeout(() => {
+            router.push({
+              pathname: "/[workspace]/chat-session-rename",
+              params: {
+                workspace: wsSlug,
+                sessionId: activeSession.id,
+                initialTitle: activeSession.title ?? "",
+              },
+            });
+          }, 300);
+          return;
+        }
+        if (action === "agent_settings") {
+          if (!wsSlug || !currentAgent) return;
+          router.push({
+            pathname: "/[workspace]/more/agents",
+            params: { workspace: wsSlug, agentId: currentAgent.id },
+          });
+          return;
+        }
+        if (action === "archive") {
+          setActiveSessionId(null);
+          setSessionArchived.mutate(
+            { sessionId: activeSession.id, archived: true },
+            {
+              onError: (err) =>
+                Alert.alert(
+                  t("session_actions.archive_failed"),
+                  err instanceof Error
+                    ? err.message
+                    : t("common:states.error"),
+                ),
+            },
+          );
+          return;
+        }
+        if (action === "unarchive") {
+          setSessionArchived.mutate(
+            { sessionId: activeSession.id, archived: false },
+            {
+              onError: (err) =>
+                Alert.alert(
+                  t("session_actions.archive_failed"),
+                  err instanceof Error
+                    ? err.message
+                    : t("common:states.error"),
+                ),
+            },
+          );
+          return;
+        }
+        if (action === "delete") confirmDeleteActive();
+      },
+    );
+  }, [
+    activeSession,
+    confirmDeleteActive,
+    currentAgent,
+    setSessionArchived,
+    t,
+    wsSlug,
+  ]);
 
   // ── Composer disabled-state ────────────────────────────────────────────
   const disabled =
@@ -528,14 +663,15 @@ export default function ChatTab() {
         right={
           <ChatSessionActions
             showMore={!!activeSession}
-            onMorePress={handleDeleteActive}
+            onMorePress={handleSessionActions}
             onNewPress={handleNewChat}
           />
         }
       />
       {availability === "none" ? <NoAgentBanner /> : null}
       <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        behavior="padding"
+        automaticOffset
         className="flex-1"
       >
         <ChatMessageList
@@ -550,6 +686,7 @@ export default function ChatTab() {
           quickActionsDisabled={sending || disabled}
           pendingTask={pendingTask}
           liveTaskMessages={liveTaskMessages}
+          queuedMessages={queuedMessages}
           availability={presenceAvailability}
         />
         {runtimeBound ? (
@@ -567,6 +704,7 @@ export default function ChatTab() {
           onStop={handleStop}
           sending={sending}
           allowStop={pendingTask?.status !== "queued"}
+          allowSendWhileSending={pendingTask?.supports_queue === true}
           disabled={disabled}
           disabledReason={disabledReason}
         />

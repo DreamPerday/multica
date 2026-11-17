@@ -15,7 +15,7 @@
 import { useMemo } from "react";
 import { Pressable, SectionList, View } from "react-native";
 import { useQuery } from "@tanstack/react-query";
-import { router, useIsFocused } from "expo-router";
+import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import type {
   IssuePriority,
@@ -43,6 +43,7 @@ import { useIssueStatuses } from "@/lib/use-issue-statuses";
 import { groupIssuesByStatus } from "@/lib/group-issues-by-status";
 import { filterIssues } from "@/lib/filter-issues";
 import { useColorScheme } from "@/lib/use-color-scheme";
+import { useManualRefresh } from "@/lib/use-manual-refresh";
 import { THEME } from "@/lib/theme";
 
 // Mobile pill row has tight width on SE3 (375pt). Three pills + Filter icon
@@ -54,7 +55,6 @@ import { THEME } from "@/lib/theme";
 const SCOPES: MyIssuesScope[] = ["assigned", "created", "agents"];
 
 export default function MyIssues() {
-  const isFocused = useIsFocused();
   const userId = useAuthStore((s) => s.user?.id ?? null);
   const wsId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const wsSlug = useWorkspaceStore((s) => s.currentWorkspaceSlug);
@@ -83,10 +83,11 @@ export default function MyIssues() {
     [scope, userId],
   );
 
-  const { data, isLoading, error, refetch, isRefetching } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     ...myIssueListOptions(wsId, scope, filter),
     enabled: !!wsId && !!userId,
   });
+  const { refreshing, onRefresh } = useManualRefresh(refetch);
 
   // Catalog labels and ordering enhance exact-key sections without blocking rows.
   const catalog = useIssueStatuses();
@@ -177,8 +178,8 @@ export default function MyIssues() {
               }}
             />
           )}
-          refreshing={isFocused && isRefetching}
-          onRefresh={refetch}
+          refreshing={refreshing}
+          onRefresh={onRefresh}
         />
       )}
 

@@ -330,6 +330,9 @@ export const SendChatMessageResponseSchema: z.ZodType<SendChatMessageResponse> =
   task_id: z.string(),
   supports_queue: z.boolean().optional(),
   queued: z.boolean().optional().catch(undefined),
+  steered: z.boolean().optional().catch(undefined),
+  message_task_id: z.string().min(1).optional().catch(undefined),
+  message_created_at: z.string().min(1).optional().catch(undefined),
   created_at: z.string().default(""),
 }).loose();
 

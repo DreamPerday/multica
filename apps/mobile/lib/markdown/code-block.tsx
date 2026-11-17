@@ -44,13 +44,42 @@ import {
   CODE_BLOCK_LANG_LABEL_CLASS,
   CODE_BLOCK_TEXT_CLASS,
 } from "./tokens";
-import {
-  highlight,
-  resolveLang,
-  SHIKI_THEME_DARK,
-  SHIKI_THEME_LIGHT,
-  type HighlightedLine,
-} from "./shiki";
+import type { HighlightedLine } from "./shiki";
+
+const SHIKI_THEME_LIGHT = "github-light";
+const SHIKI_THEME_DARK = "github-dark";
+const LANG_ALIASES: Record<string, string> = {
+  ts: "typescript",
+  js: "javascript",
+  py: "python",
+  rs: "rust",
+  sh: "bash",
+  zsh: "bash",
+  shell: "bash",
+  yml: "yaml",
+  md: "markdown",
+};
+const KNOWN_LANGS: ReadonlySet<string> = new Set([
+  "bash",
+  "go",
+  "javascript",
+  "json",
+  "jsx",
+  "markdown",
+  "python",
+  "rust",
+  "sql",
+  "tsx",
+  "typescript",
+  "yaml",
+]);
+
+function resolveLang(input: string | undefined): string | null {
+  if (!input) return null;
+  const lower = input.toLowerCase().trim();
+  const resolved = LANG_ALIASES[lower] ?? lower;
+  return KNOWN_LANGS.has(resolved) ? resolved : null;
+}
 
 interface Props {
   code: string;
@@ -86,11 +115,13 @@ export function CodeBlock({ code, lang, selectable = true }: Props) {
   useEffect(() => {
     if (!resolvedLang) return;
     let cancelled = false;
-    void highlight(code, resolvedLang, theme).then((result) => {
-      if (!cancelled && result) {
-        setHighlighted({ code, lang: resolvedLang, theme, lines: result });
-      }
-    });
+    void import("./shiki")
+      .then(({ highlight }) => highlight(code, resolvedLang, theme))
+      .then((result) => {
+        if (!cancelled && result) {
+          setHighlighted({ code, lang: resolvedLang, theme, lines: result });
+        }
+      });
     return () => {
       cancelled = true;
     };

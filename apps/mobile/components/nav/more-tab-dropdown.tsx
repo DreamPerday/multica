@@ -1,26 +1,14 @@
 /**
- * MoreTabDropdownAnchor — the popover that opens when the More tab is
- * tapped. Mounted as a sibling to the Tabs view, NOT as the tab button
- * itself: that way the real More tab button stays a standard React
- * Navigation `PlatformPressable` (icon + "More" label, full visual
- * parity with Inbox / My Issues / Chat).
+ * MoreTabButton — the real React Navigation More tab button plus its menu.
  *
- * The wrapper View is absolute-positioned over the More tab's screen
- * rect (right 25%, bottom = safe-area, height = tab bar). It uses
- * `pointerEvents="box-none"` so taps pass through to the real tab
- * button underneath; we open the dropdown imperatively from the tab's
- * `listeners.tabPress` via the exposed `TriggerRef.open()`. The
- * @rn-primitives Trigger measures its own layout inside `open()`, so
- * the popover anchors to this invisible Pressable's rect — i.e.
- * directly above the More tab.
+ * React Navigation renders the same PlatformPressable it uses for every
+ * other tab, so icon, label, accessibility state, and spacing stay exact.
+ * Pressing it emits tabPress (which the tab layout prevents) and opens a
+ * transparent native Modal containing the menu card.
  *
- * Why ref-controlled instead of `asChild` on the tab button: a previous
- * attempt wrapped a custom tabBarButton in `<DropdownMenu.Root>` +
- * Trigger asChild. RN's BottomTabItem wraps the returned button in
- * `<View style={{flex:1}}>` and expects a single Pressable child. Our
- * Root introduced an extra wrapping `View` with no flex:1, collapsing
- * the More cell and stripping the label. The Option B pattern here
- * leaves the real tab button entirely alone.
+ * The native Modal replaces `@rn-primitives/dropdown-menu` here because its
+ * Android Portal did not receive a usable anchor position for this invisible
+ * tab action. The menu contents and theme tokens are otherwise unchanged.
  *
  * Visual conventions inside the popover (apps/mobile/CLAUDE.md):
  *   - All glyphs are SF Symbols rendered via expo-image (`sf:` source),
@@ -35,20 +23,21 @@
  *     and offered no friction against accidental taps.
  */
 import { PlatformIcon, type PlatformIconName } from "@/components/ui/platform-icon";
-import { useMemo } from "react";
-import { Image, Pressable, View } from "react-native";
+import { useMemo, useState } from "react";
+import {
+  Image,
+  Modal,
+  Pressable,
+  StyleSheet,
+  View,
+  type PressableProps,
+} from "react-native";
 import { router, usePathname } from "expo-router";
+import { PlatformPressable } from "expo-router/build/react-navigation/elements";
+import type { BottomTabBarButtonProps } from "expo-router/build/react-navigation/bottom-tabs";
 import { useQuery } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import type { TriggerRef } from "@rn-primitives/dropdown-menu";
 import type { User, Workspace } from "@multica/core/types";
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-} from "@/components/ui/dropdown-menu";
 import { Text } from "@/components/ui/text";
 import { WorkspaceAvatar } from "@/components/workspace/workspace-avatar";
 import { workspaceListOptions } from "@/data/queries/workspaces";
@@ -59,15 +48,13 @@ import { useColorScheme } from "@/lib/use-color-scheme";
 import { THEME } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
-// iOS bottom tab bar default height (above safe-area). React Navigation
-// doesn't expose this as a layout constant, but the value is stable
-// across Expo Router 55 / RN Screens 4 — see BottomTabBar.tsx in
-// @react-navigation/bottom-tabs (`styles.tab` has no explicit height;
-// the container settles at 49 from the inner padding + icon size).
-const TAB_BAR_HEIGHT = 49;
-
 interface NavItem {
-  labelKey: "more_menu.pinned" | "more_menu.issues" | "more_menu.projects";
+  labelKey:
+    | "more_menu.pinned"
+    | "more_menu.issues"
+    | "more_menu.projects"
+    | "more_menu.agents"
+    | "more_menu.settings";
   /** SF Symbol name for iOS; paired with `ion` for everything else. */
   icon: string;
   /** Ionicons fallback, see components/ui/platform-icon.tsx. */
@@ -85,19 +72,29 @@ const NAV_ITEMS: NavItem[] = [
     ion: "albums-outline",
     path: "/more/projects",
   },
+  {
+    labelKey: "more_menu.agents",
+    icon: "person.2",
+    ion: "people-outline",
+    path: "/more/agents",
+  },
+  {
+    labelKey: "more_menu.settings",
+    icon: "gearshape",
+    ion: "settings-outline",
+    path: "/more/settings",
+  },
 ];
 
-export function MoreTabDropdownAnchor({
-  triggerRef,
-}: {
-  triggerRef: React.RefObject<TriggerRef | null>;
-}) {
+export function MoreTabButton(props: BottomTabBarButtonProps) {
+  const [moreOpen, setMoreOpen] = useState(false);
   const insets = useSafeAreaInsets();
   const slug = useWorkspaceStore((s) => s.currentWorkspaceSlug);
   const user = useAuthStore((s) => s.user);
   const pathname = usePathname();
   const { colorScheme } = useColorScheme();
   const { t } = useT("navigation");
+  const { t: tCommon } = useT("common");
   const theme = THEME[colorScheme];
   const currentWorkspace = useCurrentWorkspace(slug);
 
@@ -107,79 +104,105 @@ export function MoreTabDropdownAnchor({
     return pathname === target || pathname.startsWith(target + "/");
   };
 
+  const closeMore = () => setMoreOpen(false);
+  const navigate = (path: string) => {
+    closeMore();
+    if (slug) {
+      router.push(`/${slug}${path}`);
+    }
+  };
+
   return (
-    <View
-      pointerEvents="box-none"
-      style={{
-        position: "absolute",
-        right: 0,
-        bottom: insets.bottom,
-        width: "25%",
-        height: TAB_BAR_HEIGHT,
-      }}
-    >
-      <DropdownMenu>
-        <DropdownMenuTrigger ref={triggerRef} asChild>
-          {/* Invisible, non-tappable: the real tab button below catches
-              all touches; we open this trigger imperatively via ref.
-              The Pressable just provides a measurable rect for the
-              popover to anchor against. */}
+    <>
+      <PlatformPressable
+        {...props}
+        onPress={(event) => {
+          props.onPress?.(event);
+          setMoreOpen(true);
+        }}
+      />
+
+      <Modal
+        visible={moreOpen}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={closeMore}
+      >
+        <View style={{ flex: 1 }}>
           <Pressable
-            pointerEvents="none"
-            accessibilityElementsHidden
-            importantForAccessibility="no-hide-descendants"
-            style={{ width: "100%", height: "100%" }}
-          />
-        </DropdownMenuTrigger>
-
-        <DropdownMenuContent
-          side="top"
-          align="end"
-          sideOffset={6}
-          className="w-72 p-2"
-        >
-          <UserCard
-            user={user}
-            onPress={() => slug && router.push(`/${slug}/more/settings`)}
-            chevronTint={theme.mutedForeground}
+            accessibilityLabel={tCommon("actions.close")}
+            onPress={closeMore}
+            style={StyleSheet.absoluteFill}
           />
 
-          <DropdownMenuSeparator />
-
-          <WorkspaceCard
-            currentWorkspaceName={currentWorkspace?.name}
-            currentWorkspaceAvatarUrl={currentWorkspace?.avatar_url}
-            onPress={() =>
-              slug && router.push(`/${slug}/switch-workspace`)
-            }
-            chevronTint={theme.mutedForeground}
-          />
-
-          <DropdownMenuSeparator />
-
-          {NAV_ITEMS.map((item) => (
-            <DropdownMenuItem
-              key={item.path}
-              onPress={() => slug && router.push(`/${slug}${item.path}`)}
-              accessibilityLabel={t(item.labelKey)}
-              className={cn(
-                "h-9 gap-3",
-                isActive(item.path) && "bg-secondary",
-              )}
-            >
-              <PlatformIcon
-                sf={item.icon}
-                ion={item.ion}
-                size={18}
-                color={theme.foreground}
+          <View
+            className="absolute right-3 w-[336px] rounded-lg border border-border bg-popover p-2 shadow-md shadow-black/10"
+            style={{ bottom: insets.bottom + 58 }}
+          >
+            <UserCard
+              user={user}
+              onPress={() => navigate("/more/settings")}
+              chevronTint={theme.mutedForeground}
               />
-              <Text className="text-sm text-foreground">{t(item.labelKey)}</Text>
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </View>
+
+            <MenuSeparator />
+
+            <WorkspaceCard
+              currentWorkspaceName={currentWorkspace?.name}
+              currentWorkspaceAvatarUrl={currentWorkspace?.avatar_url}
+              onPress={() => navigate("/switch-workspace")}
+              chevronTint={theme.mutedForeground}
+            />
+
+            <MenuSeparator />
+
+            {NAV_ITEMS.map((item) => (
+              <MenuRow
+                key={item.path}
+                onPress={() => navigate(item.path)}
+                accessibilityLabel={t(item.labelKey)}
+                className={cn(
+                  "h-9 gap-3",
+                  isActive(item.path) && "bg-secondary",
+                )}
+              >
+                <PlatformIcon
+                  sf={item.icon}
+                  ion={item.ion}
+                  size={18}
+                  color={theme.foreground}
+                />
+                <Text className="text-sm text-foreground">
+                  {t(item.labelKey)}
+                </Text>
+              </MenuRow>
+            ))}
+          </View>
+        </View>
+      </Modal>
+    </>
   );
+}
+
+function MenuRow({
+  className,
+  ...props
+}: PressableProps & { className?: string }) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      className={cn(
+        "flex-row items-center gap-2 rounded-sm px-2 py-2 active:bg-accent",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function MenuSeparator() {
+  return <View className="-mx-1 my-1 h-px bg-border" />;
 }
 
 /**
@@ -200,7 +223,7 @@ function UserCard({
   const initial = (user?.name ?? user?.email ?? "U").charAt(0).toUpperCase();
   const { t } = useT("navigation");
   return (
-    <DropdownMenuItem
+    <MenuRow
       onPress={onPress}
       className="h-12 gap-3"
       accessibilityLabel={t("more_menu.account_settings")}
@@ -239,7 +262,7 @@ function UserCard({
         size={12}
         color={chevronTint}
       />
-    </DropdownMenuItem>
+    </MenuRow>
   );
 }
 
@@ -274,7 +297,7 @@ function WorkspaceCard({
   const canSwitch = (data?.length ?? 0) > 1;
 
   return (
-    <DropdownMenuItem
+    <MenuRow
       onPress={onPress}
       disabled={!canSwitch}
       className="h-12 gap-3"
@@ -305,7 +328,7 @@ function WorkspaceCard({
           color={chevronTint}
         />
       ) : null}
-    </DropdownMenuItem>
+    </MenuRow>
   );
 }
 

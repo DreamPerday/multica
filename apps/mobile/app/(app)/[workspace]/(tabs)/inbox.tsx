@@ -1,5 +1,5 @@
 import { showActionSheetWithOptions } from "@/components/ui/action-sheet";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   Alert,
   FlatList,
@@ -39,9 +39,10 @@ export default function Inbox() {
   const wsId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const wsSlug = useWorkspaceStore((s) => s.currentWorkspaceSlug);
   const { colorScheme } = useColorScheme();
-  const { data: rawItems, isLoading, error, refetch, isRefetching } = useQuery(
+  const { data: rawItems, isLoading, error, refetch } = useQuery(
     inboxListOptions(wsId),
   );
+  const [manualRefreshing, setManualRefreshing] = useState(false);
   // Dedup + drop archived to match web/desktop. See CLAUDE.md
   // "Behavioral parity" → inbox dedup incident.
   const data = useMemo(
@@ -54,6 +55,15 @@ export default function Inbox() {
   const archiveAll = useArchiveAllInbox();
   const archiveAllRead = useArchiveAllReadInbox();
   const archiveCompleted = useArchiveCompletedInbox();
+
+  const onRefresh = useCallback(async () => {
+    setManualRefreshing(true);
+    try {
+      await refetch();
+    } finally {
+      setManualRefreshing(false);
+    }
+  }, [refetch]);
 
   const onPressItem = useCallback((item: InboxItem) => {
     // Read on every opening: a read row can hide older unread notifications.
@@ -150,8 +160,8 @@ export default function Inbox() {
               onArchive={() => archive.mutate(item.id)}
             />
           )}
-          refreshing={isRefetching}
-          onRefresh={refetch}
+          refreshing={manualRefreshing}
+          onRefresh={onRefresh}
         />
       )}
     </View>

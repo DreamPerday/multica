@@ -48,6 +48,7 @@ import { useAuthStore } from "@/data/auth-store";
 import { useProjectRealtime } from "@/data/realtime/use-project-realtime";
 import { useWorkspaceStore } from "@/data/workspace-store";
 import { useT } from "@/lib/i18n";
+import { useManualRefresh } from "@/lib/use-manual-refresh";
 
 export default function ProjectDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -62,7 +63,7 @@ export default function ProjectDetail() {
   // viewing, pop back so the user isn't stranded on a 404.
   useProjectRealtime(id, () => router.back());
 
-  const onRefresh = useCallback(async () => {
+  const refreshProject = useCallback(async () => {
     await Promise.all([
       detail.refetch(),
       qc.invalidateQueries({ queryKey: projectResourcesOptions(wsId, id).queryKey }),
@@ -71,6 +72,7 @@ export default function ProjectDetail() {
       }),
     ]);
   }, [detail, qc, wsId, id]);
+  const { refreshing, onRefresh } = useManualRefresh(refreshProject);
 
   const project = detail.data;
 
@@ -203,7 +205,7 @@ export default function ProjectDetail() {
           contentContainerClassName="pb-10"
           refreshControl={
             <RefreshControl
-              refreshing={detail.isRefetching}
+              refreshing={refreshing}
               onRefresh={onRefresh}
             />
           }

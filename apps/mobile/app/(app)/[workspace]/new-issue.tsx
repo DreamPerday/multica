@@ -17,11 +17,10 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Alert,
-  KeyboardAvoidingView,
-  Platform,
   ScrollView,
   TextInput,
 } from "react-native";
+import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { Stack, router } from "expo-router";
 import { SubmitIssueButton } from "@/components/issue/submit-issue-button";
 import { CreateFormAttributeRow } from "@/components/issue/create-form-attribute-row";
@@ -31,6 +30,7 @@ import { MOBILE_PLACEHOLDER_COLOR } from "@/components/ui/input-tokens";
 import { useCreateIssue } from "@/data/mutations/issues";
 import { useNewIssueDraftStore } from "@/data/stores/new-issue-draft-store";
 import { useMentionInput } from "@/lib/use-mention-input";
+import type { MentionMarker } from "@/lib/mention-serialize";
 import { useT } from "@/lib/i18n";
 
 export default function NewIssueModal() {
@@ -48,6 +48,7 @@ export default function NewIssueModal() {
   const dueDate = useNewIssueDraftStore((s) => s.dueDate);
   const project = useNewIssueDraftStore((s) => s.project);
   const resetDraft = useNewIssueDraftStore((s) => s.reset);
+  const setAssignee = useNewIssueDraftStore((s) => s.setAssignee);
 
   useEffect(() => {
     resetDraft();
@@ -60,6 +61,19 @@ export default function NewIssueModal() {
   const isSubmitting = createIssue.isPending;
 
   const canSubmit = !isSubmitting && title.trim().length > 0;
+
+  const onSelectMention = useCallback(
+    (mention: MentionMarker) => {
+      description.suggestionBar.onSelect(mention);
+      // Mentioning a runnable actor in the task body is the mobile equivalent
+      // of choosing it with the assignee chip. Persisting it as the assignee
+      // lets the server's normal issue-assignment path enqueue the agent task.
+      if (mention.type === "agent" || mention.type === "squad") {
+        setAssignee({ type: mention.type, id: mention.id });
+      }
+    },
+    [description.suggestionBar, setAssignee],
+  );
 
   const onSubmit = useCallback(async () => {
     const trimmedTitle = title.trim();
@@ -112,7 +126,8 @@ export default function NewIssueModal() {
       <Stack.Screen options={{ headerRight }} />
       <KeyboardAvoidingView
         className="flex-1 bg-background"
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        behavior="padding"
+        automaticOffset
       >
         <ScrollView
           className="flex-1"
@@ -139,7 +154,10 @@ export default function NewIssueModal() {
         {/* Mention suggestions float above the keyboard only when the user
             types `@`. Self-hides via `if (!visible) return null` so it
             doesn't take space at rest. */}
-        <MentionSuggestionBar {...description.suggestionBar} />
+        <MentionSuggestionBar
+          {...description.suggestionBar}
+          onSelect={onSelectMention}
+        />
       </KeyboardAvoidingView>
     </>
   );
