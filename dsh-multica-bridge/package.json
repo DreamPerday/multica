@@ -1,0 +1,13 @@
+{
+  "name": "dsh-multica-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Translates Multica's versioned JSONL stdio protocol to `dsh --profile headless --json` run events, so Multica can drive DeepSeek Harness without the unpublished @multica-ai/dsh-runtime profile bundle.",
+  "type": "module",
+  "bin": {
+    "dsh-multica-bridge": "./dsh-multica-bridge.cmd"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
