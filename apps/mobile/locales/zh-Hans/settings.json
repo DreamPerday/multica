@@ -84,6 +84,23 @@
     "system_notifications": "系统通知",
     "chat_replies": "包含聊天回复"
   },
+  "device": {
+    "title": "此设备",
+    "permission": "通知权限",
+    "channel_name": "消息",
+    "description": "Multica 在后台时接收智能体回复和收件箱提醒。",
+    "checking": "正在检查",
+    "status_granted": "已允许",
+    "status_denied": "已被系统阻止",
+    "status_undetermined": "尚未允许",
+    "status_unavailable": "当前设备不支持",
+    "allow": "允许通知",
+    "open_settings": "打开系统设置",
+    "test": "发送测试通知",
+    "test_title": "Multica 通知测试",
+    "test_body": "通知权限和消息频道工作正常。",
+    "background_hint": "如果小米系统延迟提醒，请将 Multica 的省电策略设为“无限制”，并允许自启动。"
+  },
   "groups.assignments_description": "任务分配给我或取消分配给我时。",
   "groups.mentions_description": "有人用 @ 提到你时，包括 @all 和 @squad。"
 }

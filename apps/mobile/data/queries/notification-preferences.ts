@@ -14,9 +14,13 @@ export const notificationPreferenceKeys = {
   all: (wsId: string | null) => ["notification-preferences", wsId] as const,
 };
 
-export const notificationPreferenceOptions = (wsId: string | null) =>
+export const notificationPreferenceOptions = (
+  wsId: string | null,
+  workspaceSlug?: string,
+) =>
   queryOptions({
     queryKey: notificationPreferenceKeys.all(wsId),
-    queryFn: ({ signal }) => api.getNotificationPreferences({ signal }),
+    queryFn: ({ signal }) =>
+      api.getNotificationPreferences({ signal, workspaceSlug }),
     enabled: !!wsId,
   });

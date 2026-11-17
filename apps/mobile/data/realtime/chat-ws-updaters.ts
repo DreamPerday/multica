@@ -31,6 +31,7 @@ import type {
   ChatQuickActionsPayload,
   ChatSession,
   ChatSessionDeletedPayload,
+  SendChatMessageResponse,
   TaskMessagePayload,
   TaskQueuedPayload,
   TaskDispatchPayload,
@@ -211,6 +212,16 @@ export function seedPendingTaskFromQueued(
   // A follow-up can be queued while another task is active. The event does
   // not carry enough queue state to replace that active head safely.
   invalidatePendingTask(qc, payload.chat_session_id);
+  // Re-queued guidance can change which task owns a message. The refetched
+  // row is what moves it from the transcript into the queued section.
+  const messages = qc.getQueryData<ChatMessage[]>(
+    chatKeys.messages(payload.chat_session_id),
+  );
+  if (!messages?.some((message) => message.task_id === payload.task_id)) {
+    qc.invalidateQueries({
+      queryKey: chatKeys.messages(payload.chat_session_id),
+    });
+  }
 }
 
 export function promotePendingTaskToRunning(
@@ -288,6 +299,57 @@ export function seedAcceptedPendingTask(
     },
   );
   invalidatePendingTask(qc, payload.chat_session_id);
+}
+
+/**
+ * Reconcile this device's optimistic send with the server's acceptance.
+ *
+ * Steered guidance belongs to the running reply's root request rather than
+ * the task_id of a new turn. Older servers omit the message-specific fields,
+ * so for a normal turn the task's values remain the correct fallback.
+ */
+export function reconcileAcceptedChatSend(
+  qc: QueryClient,
+  payload: {
+    chat_session_id: string;
+    optimistic_message_id: string;
+    optimistic_task_id: string;
+    content: string;
+    result: SendChatMessageResponse;
+  },
+) {
+  const { chat_session_id: sessionId, result } = payload;
+  qc.setQueryData<ChatMessage[]>(chatKeys.messages(sessionId), (old) =>
+    old?.map((message) =>
+      message.id === payload.optimistic_message_id
+        ? {
+            ...message,
+            id: result.message_id,
+            task_id: result.message_task_id ?? result.task_id,
+            created_at: result.message_created_at ?? result.created_at,
+          }
+        : message,
+    ),
+  );
+
+  if (result.steered === true) {
+    qc.setQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId), (old) =>
+      removePendingChatTask(old, payload.optimistic_task_id),
+    );
+    invalidatePendingTask(qc, sessionId);
+  } else {
+    seedAcceptedPendingTask(qc, {
+      chat_session_id: sessionId,
+      task_id: result.task_id,
+      created_at: result.created_at,
+      message_id: result.message_id,
+      content: payload.content,
+      optimistic_task_id: payload.optimistic_task_id,
+      supports_queue: result.supports_queue,
+      queued: result.queued,
+    });
+  }
+  qc.invalidateQueries({ queryKey: chatKeys.messages(sessionId) });
 }
 
 // Task messages (live timeline, keyed by taskId)

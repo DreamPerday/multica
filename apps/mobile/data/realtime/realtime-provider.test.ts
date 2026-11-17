@@ -9,6 +9,10 @@ const lifecycle = vi.hoisted(() => ({
   onAppState: undefined as ((state: string) => void) | undefined,
 }));
 
+const queryClientMock = vi.hoisted(() => ({
+  invalidateQueries: vi.fn(() => Promise.resolve()),
+}));
+
 vi.mock("react", async (importOriginal) => ({
   ...await importOriginal<typeof import("react")>(),
   useEffect: (setup: () => () => void) => { lifecycle.setup = setup; },
@@ -16,6 +20,7 @@ vi.mock("react", async (importOriginal) => ({
   useState: () => [lifecycle.clientState, (value: unknown) => { lifecycle.clientState = value; }],
 }));
 vi.mock("react-native", () => ({
+  Platform: { OS: "android" },
   AppState: {
     addEventListener: (_event: string, handler: (state: string) => void) => {
       lifecycle.onAppState = handler;
@@ -30,6 +35,9 @@ vi.mock("@/data/auth-store", () => ({ useAuthStore: () => lifecycle.userId }));
 vi.mock("@/data/workspace-store", () => ({ useWorkspaceStore: () => lifecycle.wsSlug }));
 vi.mock("@/data/secure-storage", () => ({ getToken: async () => "token" }));
 vi.mock("@/data/api", () => ({ api: { getToken: () => "token" } }));
+vi.mock("@tanstack/react-query", () => ({
+  useQueryClient: () => queryClientMock,
+}));
 
 // Run the provider's effect and its actual WSClient, without rendering RN.
 class MockWebSocket {
@@ -48,6 +56,7 @@ describe("RealtimeProvider foreground recovery", () => {
     lifecycle.setup = undefined;
     lifecycle.onAppState = undefined;
     MockWebSocket.instances = [];
+    queryClientMock.invalidateQueries.mockReset();
     vi.stubGlobal("WebSocket", MockWebSocket);
     vi.stubEnv("EXPO_PUBLIC_API_URL", "https://example.test");
     vi.spyOn(console, "info").mockImplementation(() => {});
@@ -56,6 +65,7 @@ describe("RealtimeProvider foreground recovery", () => {
   afterEach(() => {
     cleanup?.();
     cleanup = undefined;
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
@@ -88,6 +98,26 @@ describe("RealtimeProvider foreground recovery", () => {
     await Promise.resolve();
     expect(MockWebSocket.instances).toHaveLength(0);
     expect(lifecycle.onAppState).toBeUndefined();
+  });
+
+  it("refreshes active queries while the socket remains unauthenticated", async () => {
+    vi.useFakeTimers();
+    const { RealtimeProvider } = await import("./realtime-provider");
+    RealtimeProvider({ children: null });
+    cleanup = lifecycle.setup!();
+    await Promise.resolve();
+
+    vi.advanceTimersByTime(5_000);
+
+    expect(queryClientMock.invalidateQueries).toHaveBeenCalledWith({
+      type: "active",
+      predicate: expect.any(Function),
+    });
+
+    const predicate = queryClientMock.invalidateQueries.mock.calls[0][0]
+      .predicate as (query: { queryKey: readonly unknown[] }) => boolean;
+    expect(predicate({ queryKey: ["inbox", "workspace"] })).toBe(true);
+    expect(predicate({ queryKey: ["members", "workspace"] })).toBe(false);
   });
 
   it("preserves the children reconciliation identity across workspace changes", async () => {

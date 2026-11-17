@@ -15,7 +15,14 @@
     "title": "AI 代理",
     "empty": "還沒有 AI 代理",
     "search_placeholder": "搜尋 AI 代理...",
-    "coming_soon": "AI 代理功能即將上線。"
+    "coming_soon": "AI 代理功能即將上線。",
+    "no_matches": "沒有符合的 AI 代理。",
+    "load_failed": "AI 代理載入失敗：{{message}}",
+    "online": "在線",
+    "offline": "離線",
+    "reconnecting": "重新連線中",
+    "needs_runtime": "需要執行環境",
+    "checking": "檢查中"
   },
   "actions": {
     "retry": "重試",

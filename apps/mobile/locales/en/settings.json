@@ -83,5 +83,22 @@
     "system": "System",
     "system_notifications": "System notifications",
     "chat_replies": "Include chat replies"
+  },
+  "device": {
+    "title": "This device",
+    "permission": "Notification permission",
+    "channel_name": "Messages",
+    "description": "Receive agent replies and inbox alerts while Multica is in the background.",
+    "checking": "Checking",
+    "status_granted": "Allowed",
+    "status_denied": "Blocked by system",
+    "status_undetermined": "Not enabled",
+    "status_unavailable": "Unsupported on this device",
+    "allow": "Allow notifications",
+    "open_settings": "Open system settings",
+    "test": "Send test notification",
+    "test_title": "Multica notification test",
+    "test_body": "Notification permission and the message channel are working.",
+    "background_hint": "If Xiaomi delays alerts, set Multica's battery saver to No restrictions and allow autostart."
   }
 }

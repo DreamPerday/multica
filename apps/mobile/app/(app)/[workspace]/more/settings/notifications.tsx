@@ -13,11 +13,14 @@ import type {
   NotificationPreferences,
 } from "@multica/core/types";
 import { Text } from "@/components/ui/text";
+import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { useWorkspaceStore } from "@/data/workspace-store";
 import { notificationPreferenceOptions } from "@/data/queries/notification-preferences";
 import { useUpdateNotificationPreferences } from "@/data/mutations/notification-preferences";
+import { useDeviceNotificationPermission } from "@/lib/use-device-notification-permission";
+import { showTestMessageNotification } from "@/lib/device-notifications";
 import { useT } from "@/lib/i18n";
 
 const INBOX_GROUPS: {
@@ -68,6 +71,13 @@ export default function NotificationsSettingsScreen() {
     notificationPreferenceOptions(wsId),
   );
   const mutation = useUpdateNotificationPreferences();
+  const {
+    permission,
+    loading: permissionLoading,
+    requesting,
+    request,
+    openSettings,
+  } = useDeviceNotificationPermission();
 
   const preferences: NotificationPreferences = data?.preferences ?? {};
 
@@ -83,6 +93,43 @@ export default function NotificationsSettingsScreen() {
   };
 
   const systemEnabled = preferences.system_notifications !== "muted";
+  const permissionStatusKey =
+    permission.status === "granted"
+      ? "device.status_granted"
+      : permission.status === "denied"
+        ? "device.status_denied"
+        : permission.status === "unavailable"
+          ? "device.status_unavailable"
+          : "device.status_undetermined";
+  const canRequestPermission =
+    permission.status === "undetermined" || permission.canAskAgain;
+  const onPermissionPress = async () => {
+    if (permission.status === "granted" || !canRequestPermission) {
+      await openSettings();
+      return;
+    }
+    await request(t("device.channel_name"));
+  };
+  const onSystemToggle = async (enabled: boolean) => {
+    if (enabled && permission.status !== "granted") {
+      if (canRequestPermission) {
+        const next = await request(t("device.channel_name"));
+        if (next.status !== "granted") return;
+      } else {
+        await openSettings();
+        return;
+      }
+    }
+    onToggle("system_notifications", enabled);
+  };
+  const onSendTest = async () => {
+    const shown = await showTestMessageNotification(
+      t("device.test_title"),
+      t("device.test_body"),
+      t("device.channel_name"),
+    );
+    if (!shown) await request(t("device.channel_name"));
+  };
 
   if (isLoading) {
     return (
@@ -107,6 +154,56 @@ export default function NotificationsSettingsScreen() {
       className="flex-1 bg-background"
       contentContainerClassName="px-4 py-4 gap-6"
     >
+      <Section
+        title={t("device.title")}
+        description={t("device.description")}
+      >
+        <View className="flex-row items-center px-4 py-3 gap-3">
+          <View className="flex-1">
+            <Text className="text-base font-medium text-foreground">
+              {t("device.permission")}
+            </Text>
+            <Text className="text-xs text-muted-foreground mt-0.5">
+              {permissionLoading
+                ? t("device.checking")
+                : t(permissionStatusKey)}
+            </Text>
+          </View>
+          <View className="gap-2">
+            <Button
+              size="sm"
+              variant={permission.status === "granted" ? "outline" : "default"}
+              className="h-12"
+              disabled={permissionLoading || requesting}
+              onPress={() => void onPermissionPress()}
+            >
+              <Text>
+                {permission.status === "granted" || !canRequestPermission
+                  ? t("device.open_settings")
+                  : t("device.allow")}
+              </Text>
+            </Button>
+            {permission.status === "granted" ? (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-12"
+                disabled={requesting}
+                onPress={() => void onSendTest()}
+              >
+                <Text>{t("device.test")}</Text>
+              </Button>
+            ) : null}
+          </View>
+        </View>
+        <Separator />
+        <View className="px-4 py-3">
+          <Text className="text-xs text-muted-foreground">
+            {t("device.background_hint")}
+          </Text>
+        </View>
+      </Section>
+
       <Section
         title={t("groups.inbox_notifications")}
       >
@@ -146,7 +243,7 @@ export default function NotificationsSettingsScreen() {
           </View>
           <Switch
             checked={systemEnabled}
-            onCheckedChange={(checked) => onToggle("system_notifications", checked)}
+            onCheckedChange={(checked) => void onSystemToggle(checked)}
           />
         </View>
         {systemEnabled && (

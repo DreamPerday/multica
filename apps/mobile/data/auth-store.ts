@@ -12,7 +12,15 @@
 import { create } from "zustand";
 import type { User } from "@multica/core/types";
 import { api, ApiError } from "./api";
-import { clearToken, getToken, setToken } from "./secure-storage";
+import {
+  clearCachedUser,
+  clearToken,
+  getCachedUserJson,
+  getToken,
+  setCachedUserJson,
+  setToken,
+} from "./secure-storage";
+import { UserSchema } from "./schemas";
 import { invalidateSessionEpoch } from "./session-epoch";
 import { useWorkspaceStore } from "./workspace-store";
 
@@ -28,6 +36,16 @@ interface AuthState {
   setUser: (user: User) => void;
 }
 
+function parseCachedUser(raw: string | null): User | null {
+  if (!raw) return null;
+  try {
+    const parsed = UserSchema.safeParse(JSON.parse(raw));
+    return parsed.success && parsed.data.id ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
 export const useAuthStore = create<AuthState>((set) => ({
   user: null,
   isLoading: true,
@@ -38,19 +56,31 @@ export const useAuthStore = create<AuthState>((set) => ({
     // workspace without flashing /select-workspace.
     await useWorkspaceStore.getState().restoreSlug();
 
-    const token = await getToken();
+    const [token, cachedUserJson] = await Promise.all([
+      getToken(),
+      getCachedUserJson(),
+    ]);
     if (!token) {
+      await clearCachedUser();
       set({ isLoading: false });
       return;
     }
     api.setToken(token);
+    const cachedUser = parseCachedUser(cachedUserJson);
+    if (cachedUser) {
+      // Render the authenticated shell immediately. getMe below remains the
+      // source of truth and corrects/evicts this optimistic profile.
+      set({ user: cachedUser, isLoading: false });
+    }
     try {
       const user = await api.getMe();
       set({ user, isLoading: false });
+      void setCachedUserJson(JSON.stringify(user)).catch(() => undefined);
     } catch (err) {
       // Only clear token on a genuine 401. Network blips / 5xx keep the
       // token so the next launch (or a manual refresh) can retry.
-      if (err instanceof ApiError && err.status === 401) {
+      const unauthorized = err instanceof ApiError && err.status === 401;
+      if (unauthorized) {
         // Synchronous first, before the awaited delete: anything already
         // in flight has to learn the credential is dead now, not once the
         // Keychain write lands.
@@ -58,7 +88,7 @@ export const useAuthStore = create<AuthState>((set) => ({
         await clearToken();
         api.setToken(null);
       }
-      set({ user: null, isLoading: false });
+      set({ user: unauthorized ? null : cachedUser, isLoading: false });
     }
   },
 
@@ -75,6 +105,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     await setToken(token);
     api.setToken(token);
     set({ user });
+    void setCachedUserJson(JSON.stringify(user)).catch(() => undefined);
     return user;
   },
 
@@ -88,5 +119,8 @@ export const useAuthStore = create<AuthState>((set) => ({
     set({ user: null });
   },
 
-  setUser: (user) => set({ user }),
+  setUser: (user) => {
+    set({ user });
+    void setCachedUserJson(JSON.stringify(user)).catch(() => undefined);
+  },
 }));

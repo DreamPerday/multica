@@ -16,16 +16,11 @@ import { useAuthStore } from "@/data/auth-store";
 import { useWorkspaceStore } from "@/data/workspace-store";
 import { SessionActivityBoundary } from "@/components/auth/session-activity-boundary";
 import { ActionSheetProvider } from "@/components/ui/action-sheet";
-import { LightboxProvider, prewarmHighlighter } from "@/lib/markdown";
+import { DeviceNotificationPermissionBootstrap } from "@/components/notifications/device-notification-permission-bootstrap";
+import { LightboxProvider } from "@/lib/markdown/lightbox-provider";
 import { NAV_THEME } from "@/lib/theme";
 import { useColorScheme } from "@/lib/use-color-scheme";
 import { MobileI18nProvider } from "@/lib/i18n";
-
-// Kick off Shiki highlighter init at module load — fires once per process,
-// finishes before the user navigates to any screen with a code block. If
-// init fails (engine unavailable) the highlighter falls back to plain
-// text; nothing here is allowed to throw.
-prewarmHighlighter();
 
 function AuthInitializer({ children }: { children: React.ReactNode }) {
   const initialize = useAuthStore((s) => s.initialize);
@@ -89,6 +84,7 @@ export default function RootLayout() {
                 <AuthInitializer>
                   <SessionActivityBoundary>
                     <LightboxProvider>
+                      <DeviceNotificationPermissionBootstrap />
                       <StatusBar style={isDarkColorScheme ? "light" : "dark"} />
                       <Stack screenOptions={{ headerShown: false }}>
                         <Stack.Screen name="index" />

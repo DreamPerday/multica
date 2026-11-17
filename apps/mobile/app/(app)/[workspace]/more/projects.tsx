@@ -29,19 +29,21 @@ import { ProjectRow } from "@/components/project/project-row";
 import { projectListOptions } from "@/data/queries/projects";
 import { useWorkspaceStore } from "@/data/workspace-store";
 import { useT } from "@/lib/i18n";
+import { useManualRefresh } from "@/lib/use-manual-refresh";
 
 export default function ProjectsPage() {
   const wsId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const wsSlug = useWorkspaceStore((s) => s.currentWorkspaceSlug);
   const { t } = useT("projects");
 
-  const { data, isLoading, error, refetch, isRefetching } = useQuery(
+  const { data, isLoading, error, refetch } = useQuery(
     projectListOptions(wsId),
   );
+  const { refreshing, onRefresh } = useManualRefresh(refetch);
 
   const sorted = useMemo(() => {
     if (!data) return [];
-    return [...data].sort(
+    return data.filter((p) => !p.archived_at).sort(
       (a, b) =>
         new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
     );
@@ -92,7 +94,7 @@ export default function ProjectsPage() {
             />
           )}
           refreshControl={
-            <RefreshControl refreshing={isRefetching} onRefresh={refetch} />
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
           }
           contentContainerClassName="pb-6"
         />

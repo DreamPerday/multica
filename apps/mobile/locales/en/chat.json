@@ -20,7 +20,8 @@
     "file_too_large_title": "File too large",
     "file_too_large_message": "Files must be smaller than 100 MB.",
     "working": "Agent is working…",
-    "message": "Message…"
+    "message": "Message…",
+    "queue": "Queue for next turn"
   },
   "empty": {
     "greeting": "Hi, I'm {{name}}",
@@ -103,6 +104,20 @@
     "empty": "No chats yet.",
     "archived": "archived",
     "new_chat": "New chat"
+  },
+  "session_actions": {
+    "rename": "Rename",
+    "agent_settings": "Agent settings",
+    "archive": "Archive",
+    "unarchive": "Unarchive",
+    "delete": "Delete",
+    "rename_title": "Rename chat",
+    "rename_placeholder": "Chat title",
+    "save": "Save",
+    "saving": "Saving…",
+    "rename_failed": "Couldn't rename the chat",
+    "archive_failed": "Couldn't update archive status",
+    "session_missing": "This chat is no longer available."
   },
   "picker.title": "Choose an agent",
   "no_response": "The agent finished this turn without a text reply.",

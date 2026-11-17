@@ -12,8 +12,10 @@ import { useChatSessionsRealtime } from "@/data/realtime/use-chat-sessions-realt
 import { useProjectsRealtime } from "@/data/realtime/use-projects-realtime";
 import { usePinsRealtime } from "@/data/realtime/use-pins-realtime";
 import { usePresenceRealtime } from "@/data/realtime/use-presence-realtime";
+import { useSystemNotifications } from "@/data/realtime/use-system-notifications";
 import { useWorkspacePresencePrefetch } from "@/lib/use-workspace-presence-prefetch";
 import { ModalCloseButton } from "@/components/ui/modal-close-button";
+import { NotificationResponseBridge } from "@/components/notifications/notification-response-bridge";
 import { useNewIssueDraftResetOnWorkspaceChange } from "@/data/stores/new-issue-draft-store";
 import { useNewProjectDraftResetOnWorkspaceChange } from "@/data/stores/new-project-draft-store";
 import { useChatSessionPickerResetOnWorkspaceChange } from "@/data/stores/chat-session-picker-store";
@@ -80,6 +82,7 @@ function RealtimeSubscriptions() {
   useChatSessionsRealtime();
   useProjectsRealtime();
   usePinsRealtime();
+  useSystemNotifications();
   // Presence: warm the three queries up front so avatars don't flash a
   // dotless first render, and listen for daemon/agent/task events to keep
   // the runtime + snapshot caches fresh. See use-presence-realtime.ts for
@@ -105,8 +108,18 @@ export default function WorkspaceLayout() {
   const { t } = useT("navigation");
   const { data: workspaces, isLoading } = useQuery(workspaceListOptions());
   const setCurrentWorkspace = useWorkspaceStore((s) => s.setCurrentWorkspace);
+  const cachedWorkspaceId = useWorkspaceStore(
+    (s) => s.currentWorkspaceId,
+  );
+  const cachedWorkspaceSlug = useWorkspaceStore(
+    (s) => s.currentWorkspaceSlug,
+  );
 
   const matched = workspaces?.find((w) => w.slug === slug);
+  const canUseCachedWorkspace =
+    !workspaces &&
+    !!cachedWorkspaceId &&
+    cachedWorkspaceSlug === slug;
 
   useEffect(() => {
     if (matched) {
@@ -121,16 +134,20 @@ export default function WorkspaceLayout() {
   useNewProjectDraftResetOnWorkspaceChange(matched?.id ?? null);
   useChatSessionPickerResetOnWorkspaceChange(matched?.id ?? null);
 
-  // Wait for the workspaces list before deciding membership — otherwise a
-  // valid deep link would briefly redirect away on cold start.
-  if (isLoading) return null;
+  // Render immediately from the persisted id + slug on cold start. The server
+  // remains authoritative: once the workspaces list arrives, a stale slug is
+  // redirected as before. This removes the blank network-wait before tabs.
+  if (isLoading && !canUseCachedWorkspace) return null;
 
-  if (!matched) return <Redirect href="/select-workspace" />;
+  if (!matched && !canUseCachedWorkspace) {
+    return <Redirect href="/select-workspace" />;
+  }
 
   // Tabs hide their own header; pushed screens (issue/[id]) get a native
   // iOS Stack header with the standard back button + swipe-to-dismiss.
   return (
     <RealtimeProvider>
+      <NotificationResponseBridge />
       <RealtimeSubscriptions />
       <Stack>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
@@ -298,6 +315,7 @@ export default function WorkspaceLayout() {
         <Stack.Screen name="issues-filter" options={SHEET_OPTIONS} />
         {/* Chat session-switch sheet. */}
         <Stack.Screen name="chat-sessions" options={SHEET_OPTIONS} />
+        <Stack.Screen name="chat-session-rename" options={SHEET_OPTIONS} />
         {/* Workspace switcher — reached from the More popover's collapsed
             WorkspaceCard. Two-step (pick → iOS Alert confirm → switch). */}
         <Stack.Screen name="switch-workspace" options={SHEET_OPTIONS} />
