@@ -303,6 +303,19 @@ function resolveDshLaunch() {
     for (const name of names) candidates.push(join(dir, name));
   }
 
+  // DSH Desktop 0.2.2 and later install per-user under LOCALAPPDATA\Programs and
+  // ship a real CLI shim instead of an unpacked resources/app tree. Probe these
+  // before the generations list below: after an upgrade the old generation shim
+  // still exists but points at the uninstalled previous layout, and picking it
+  // fails with spawn EINVAL.
+  const localAppData = process.env.LOCALAPPDATA;
+  if (localAppData) {
+    for (const product of ["DeepSeek Harness", "DSH Desktop"]) {
+      const cliBin = join(localAppData, "Programs", product, "resources", "runtime", "cli", "bin");
+      for (const name of names) candidates.push(join(cliBin, name));
+    }
+  }
+
   const appData = process.env.APPDATA;
   if (appData) {
     const generations = join(appData, "DSH Desktop", "host-commands", "desktop", "generations");
@@ -323,9 +336,18 @@ function resolveDshLaunch() {
     const isBatch = /\.(cmd|bat)$/i.test(candidate);
     if (!isBatch) return { exe: candidate, prefixArgs: [], env: {} };
     const parsed = parseBatchShim(candidate);
-    if (parsed) return parsed;
-    diag(`could not parse ${candidate}; falling back to a direct spawn`);
-    return { exe: candidate, prefixArgs: [], env: {} };
+    if (parsed) {
+      // A shim can outlive the installation it points at: after an uninstall or
+      // a move, the launcher still parses but its target is gone, and spawning
+      // it fails with a bare EINVAL. Treat that as "not this candidate".
+      if (parsed.exe && !existsSync(parsed.exe)) {
+        diag(`${candidate} points at a missing ${parsed.exe}; skipping`);
+        continue;
+      }
+      return parsed;
+    }
+    diag(`could not parse ${candidate}; skipping`);
+    continue;
   }
 
   return null;

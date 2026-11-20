@@ -137,3 +137,32 @@ multica daemon logs
 ## 与移动端的关系
 
 Android 客户端与本桥接器互不依赖：手机上派活走服务端，服务端再把任务交给某个 runtime。移动端的实时消息问题与其无关（见 `docs/ANDROID-HANDOFF.md`）。
+
+## DSH Desktop 版本与安装布局
+
+DSH 换版本会改变启动方式，桥接器按以下顺序寻找可执行的 `dsh`，命中即用：
+
+1. `DSH_BRIDGE_DSH_BINARY` 环境变量（显式覆盖，最可靠）
+2. `PATH` 中的 `dsh.cmd` / `dsh.exe` / `dsh.bat`
+3. `%LOCALAPPDATA%\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd`
+   （以及旧产品名 `DSH Desktop`）
+4. `%APPDATA%\DSH Desktop\host-commands\desktop\generations\*\bin\dsh.cmd`（由新到旧）
+
+### 0.2.2 与更早版本的区别
+
+| 项 | 旧版 | 0.2.2 及以后 |
+| --- | --- | --- |
+| 主程序 | `DSH Desktop.exe` | `DeepSeek Harness.exe` |
+| 应用代码 | `resources\app\lib\desktop-cli.js`（明文） | `resources\app.asar`（打包） |
+| CLI 入口 | 由 host-command shim 间接提供 | `resources\runtime\cli\bin\dsh.cmd`（正规入口） |
+| 默认安装位置 | 用户自选（本机曾在 `D:\应用软件\...\DSH Desktop`） | 安装器默认 `%LOCALAPPDATA%\Programs\DeepSeek Harness`，也可改到别处 |
+
+`headless` 的参数没有变化，仍是 `--json`、`--session-id`、`-`（读 stdin），因此桥接器的调用方式无需修改。
+
+### 两个真实踩过的坑
+
+- **旧 shim 会指向已卸载的安装**：升级或迁移后，`%APPDATA%\...\generations` 里的旧 shim 仍然存在，但它引用的 exe 已经不在。桥接器现在会解析 shim 并**校验目标 exe 是否存在**，不存在则跳过并尝试下一个候选；解析失败的 shim 也不再回退成直接 spawn 一个 `.cmd`（Windows 下必然 `spawn EINVAL`）。
+- **安装位置会变**：如果 DSH 被装到非默认目录，桥接器在 `PATH`/默认位置都找不到它。此时在 daemon 的环境里设置
+  `DSH_BRIDGE_DSH_BINARY=<安装目录>\resources\runtime\cli\bin\dsh.cmd`，或在用户 `PATH` 前置该目录。
+  设置后必须重启 daemon 才会生效。
+
