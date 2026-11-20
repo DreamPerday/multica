@@ -312,6 +312,24 @@ multica daemon autostart status
 
 ## 相关文档
 
-- `docs/DSH-BRIDGE-HANDOFF.md` —— 桥接器协议契约与实现细节
+- `docs/DSH-BRIDGE-HANDOFF.md` —— 桥接器协议契约、DSH 版本差异与路径探测顺序
 - `docs/ANDROID-HANDOFF.md` —— 移动端归属、构建约束
 - `docs/RELEASE-ANDROID.md` —— 提交、合并、发布流程
+
+## 附注：DSH Desktop 的安装位置
+
+桥接器会依次在 `DSH_BRIDGE_DSH_BINARY`、`PATH`、`%LOCALAPPDATA%\Programs\…\resources\runtime\cli\bin`
+和 `%APPDATA%\DSH Desktop\host-commands\␊generations\…\bin` 中查找 `dsh.cmd`。
+
+**如果你把 DSH 装到非默认目录**（例如 `D:\应用软件\DeepSeek Harness`），桥接器不一定能找到它。此时设置：
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+  "DSH_BRIDGE_DSH_BINARY",
+  "D:\应用软件\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd",
+  "User")
+multica daemon restart
+```
+
+DSH 升级后如果 agent 突然派活失败并报 `DSH_EXIT ... spawn EINVAL`，先检查这个路径是否仍然有效。
+DSH 0.2.2 起主程序改名为 `DeepSeek Harness.exe`，并改用 `app.asar` 打包，旧路径会失效。
