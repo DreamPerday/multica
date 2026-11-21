@@ -179,4 +179,30 @@ dsh finished ... frames=2
 
 看到 `frames=2` + 长时间静默，就应当先检查 DSH 路径是否失效，而不是怀疑模型。
 
+### 会话与工作目录绑定
+
+DSH 把会话绑定到创建它的那个目录，**按字符串比较**，从别的目录恢复会直接拒绝：
+
+```
+dsh: session "session-…" was recorded in "…\task-a295efbe54f9\workdir",
+     not "…\task-123e0331ad55\workdir"
+```
+
+而 Multica **每轮聊天都用一个新的 `task-<hash>` 目录**，所以聊天一旦恢复就必然撞上这个错。
+
+桥接器的处理方式（`resolveSessionCwd`）：
+
+1. 带 `--session-id` 时，先读 `%DSH_HOME%\storages\session_projcache\sessions\<id>.json`
+   （`record.identity.cwd`，旧格式是 `record.cwd`）拿到记录目录；
+2. 记录目录**存在** → 就在那个目录里恢复，会话历史和 session id 都保留；
+3. 记录目录**已删除** → 去掉 `--session-id`，以新会话重开（日志会写明原因）；
+4. 读不到记录 → 不干预，交给 DSH 自己判断。
+
+这条路径由 `test/live-probe.mjs` 的第 4 个参数覆盖：
+
+```powershell
+node test/live-probe.mjs "只回答两个字：好了" "<某个 task workdir>" "session-<id>"
+```
+
+
 

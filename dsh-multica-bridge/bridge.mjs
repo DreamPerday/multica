@@ -477,6 +477,43 @@ function resolvePatchFile() {
  *    {type:"tool_result", callId, status, result}
  *    {type:"final", text}
  */
+/**
+ * Decide which directory a resumed session should run in.
+ *
+ * DSH binds a session to the directory it was created in and refuses to resume
+ * one from anywhere else ("session ... was recorded in ..., not ...") — the
+ * comparison is textual, so even a longer-lived path fails. Multica hands every
+ * chat turn its own task directory, so a resumed chat hits this as soon as the
+ * task directory changes.
+ *
+ * Resuming in the recorded directory keeps the conversation history. Only when
+ * that directory is gone is the session dropped in favour of a fresh one.
+ */
+function resolveSessionCwd(sessionId, fallbackCwd) {
+  if (!sessionId) return { cwd: fallbackCwd, dropSession: false };
+  const home = process.env.DSH_HOME ?? join(homedir(), ".dsh");
+  const file = join(home, "storages", "session_projcache", "sessions", `${sessionId}.json`);
+  let recorded;
+  try {
+    const record = JSON.parse(readFileSync(file, "utf8"));
+    // formatVersion 4 moved the directory under `identity`; older records kept
+    // it directly on `record`.
+    recorded = record?.record?.identity?.cwd ?? record?.record?.cwd ?? record?.cwd;
+  } catch {
+    return { cwd: fallbackCwd, dropSession: false }; // no cache: let dsh decide
+  }
+  if (typeof recorded !== "string" || recorded.length === 0) {
+    return { cwd: fallbackCwd, dropSession: false };
+  }
+  if (recorded === fallbackCwd) return { cwd: fallbackCwd, dropSession: false };
+  if (existsSync(recorded)) {
+    diag(`session ${sessionId} was recorded in ${recorded}; resuming there`);
+    return { cwd: recorded, dropSession: false };
+  }
+  diag(`session ${sessionId} was recorded in ${recorded}, which is gone; starting a fresh session`);
+  return { cwd: fallbackCwd, dropSession: true };
+}
+
 function runTurn(command, { onDone }) {
   const requestId = command.request_id ?? "";
   const launch = resolveDshLaunch();
@@ -506,21 +543,25 @@ function runTurn(command, { onDone }) {
   const patchFile = modelOverride?.file ?? resolvePatchFile();
   if (patchFile) profileArgs.push("--patch", patchFile);
   profileArgs.push("--profile", "headless", "--json");
-  if (command.resume_session_id) profileArgs.push("--session-id", command.resume_session_id);
+  const session = resolveSessionCwd(
+    command.resume_session_id,
+    command.cwd || process.cwd(),
+  );
+  if (command.resume_session_id && !session.dropSession) {
+    profileArgs.push("--session-id", command.resume_session_id);
+  }
   profileArgs.push("-");
   const args = [...launch.prefixArgs, ...profileArgs];
 
   const cliWrapper = writeCliAuthWrapper();
   if (cliWrapper) diag(`CLI auth wrapper: ${cliWrapper.file}`);
 
-  diag(
-    `spawn ${launch.exe} ${args.join(" ")} (cwd=${command.cwd ?? process.cwd()})`,
-  );
+  diag(`spawn ${launch.exe} ${args.join(" ")} (cwd=${session.cwd})`);
 
   // Spawn the resolved executable with a plain argv. See resolveDshLaunch for
   // why the .cmd shim itself is parsed instead of executed.
   const child = spawn(launch.exe, args, {
-    cwd: command.cwd || process.cwd(),
+    cwd: session.cwd,
     // The shim exports ELECTRON_RUN_AS_NODE / DSH_HOME / DSH_DESKTOP_DEFAULT_PROFILE.
     // Spawning the executable directly means replaying them here.
     //
