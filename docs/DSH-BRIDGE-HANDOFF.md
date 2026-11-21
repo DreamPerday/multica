@@ -147,6 +147,8 @@ DSH 换版本会改变启动方式，桥接器按以下顺序寻找可执行的 
 3. `%LOCALAPPDATA%\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd`
    （以及旧产品名 `DSH Desktop`）
 4. `%APPDATA%\DSH Desktop\host-commands\desktop\generations\*\bin\dsh.cmd`（由新到旧）
+5. **Windows 卸载注册表**中 `DeepSeek Harness` 的 `InstallLocation`，
+   再拼 `resources\runtime\cli\bin\dsh.cmd`（覆盖"装到任意目录"的情况）
 
 ### 0.2.2 与更早版本的区别
 
@@ -159,10 +161,22 @@ DSH 换版本会改变启动方式，桥接器按以下顺序寻找可执行的 
 
 `headless` 的参数没有变化，仍是 `--json`、`--session-id`、`-`（读 stdin），因此桥接器的调用方式无需修改。
 
-### 两个真实踩过的坑
+### 三个真实踩过的坑
 
 - **旧 shim 会指向已卸载的安装**：升级或迁移后，`%APPDATA%\...\generations` 里的旧 shim 仍然存在，但它引用的 exe 已经不在。桥接器现在会解析 shim 并**校验目标 exe 是否存在**，不存在则跳过并尝试下一个候选；解析失败的 shim 也不再回退成直接 spawn 一个 `.cmd`（Windows 下必然 `spawn EINVAL`）。
-- **安装位置会变**：如果 DSH 被装到非默认目录，桥接器在 `PATH`/默认位置都找不到它。此时在 daemon 的环境里设置
-  `DSH_BRIDGE_DSH_BINARY=<安装目录>\resources\runtime\cli\bin\dsh.cmd`，或在用户 `PATH` 前置该目录。
-  设置后必须重启 daemon 才会生效。
+- **安装位置会变**：如果 DSH 被装到非默认目录，`PATH` 与默认位置都找不到它。桥接器会读注册表兜底；也可以在 daemon 环境里显式设置
+  `DSH_BRIDGE_DSH_BINARY=<安装目录>\resources\runtime\cli\bin\dsh.cmd`，或把该目录前置到用户 `PATH`。改完必须重启 daemon。
+- **`reg query` 的输出不是 UTF-8**：中文系统上 `reg.exe` 按控制台代码页（GBK）输出，只按 UTF-8 解码会把安装路径变成乱码，于是每个候选都"不存在"。桥接器现在对同一段输出同时尝试 UTF-8 与 GBK，由文件是否存在来判定哪次解码正确。
+
+### 找不到 DSH 时会发生什么
+
+桥接器会立刻发出 `DSH_NOT_FOUND` 结果（实测 0.4s），**不会**傻等。但在 **resume 已有会话**的运行里，Multica daemon 会等到自己的空闲看门狗（默认 2 小时）才收尾，日志表现为：
+
+```
+idle watchdog firing: no agent activity, force-stopping run ... tool_in_flight=false
+dsh finished ... frames=2
+```
+
+看到 `frames=2` + 长时间静默，就应当先检查 DSH 路径是否失效，而不是怀疑模型。
+
 

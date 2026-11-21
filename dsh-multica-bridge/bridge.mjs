@@ -37,7 +37,7 @@
  * go to stderr, which Multica keeps as a bounded tail for error reporting.
  */
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
@@ -275,6 +275,59 @@ function writeFrame(frame) {
 }
 
 /**
+ * Install roots recorded by the Windows uninstaller for this product family.
+ *
+ * The DSH installer lets the user choose a directory, and a reinstall may choose
+ * a different one. Reading what Windows recorded is the only way to find an
+ * installation that is neither on PATH nor in the default per-user location.
+ * Cached, because one bridge process serves one run.
+ */
+let cachedInstallRoots;
+function windowsInstallRoots() {
+  if (process.platform !== "win32") return [];
+  if (cachedInstallRoots !== undefined) return cachedInstallRoots;
+  cachedInstallRoots = [];
+  const keys = [
+    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+    "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+    "HKLM\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+  ];
+  for (const key of keys) {
+    let raw;
+    try {
+      // /d restricts the match to value data: InstallLocation and UninstallString
+      // both carry the product name, so one pass finds the relevant keys.
+      raw = execFileSync("reg", ["query", key, "/s", "/f", "DeepSeek Harness", "/d"], {
+        timeout: 5000,
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch {
+      continue; // key absent, reg unavailable, or no match
+    }
+    // reg.exe writes in the console code page, which is not UTF-8 on a CN
+    // install; decoding only as UTF-8 turns the install path into mojibake and
+    // every candidate then looks absent. Try both and let the existence check
+    // below pick the one that decodes to a real directory.
+    const decodings = [raw.toString("utf8")];
+    try {
+      decodings.push(new TextDecoder("gbk").decode(raw));
+    } catch {
+      /* ICU without gbk; the utf8 attempt still covers ASCII paths */
+    }
+    for (const text of decodings) {
+      for (const line of text.split(/\r?\n/)) {
+        const match = line.match(/InstallLocation\s+REG_(?:EXPAND_)?SZ\s+(.+?)\s*$/i);
+        if (!match) continue;
+        const root = match[1].replace(/^"|"$/g, "");
+        if (root && !cachedInstallRoots.includes(root)) cachedInstallRoots.push(root);
+      }
+    }
+  }
+  return cachedInstallRoots;
+}
+
+/**
  * Resolve how to start DSH.
  *
  * DSH Desktop installs a `.cmd` shim under a per-generation directory and only
@@ -295,7 +348,6 @@ function resolveDshLaunch() {
   const candidates = [];
 
   if (explicit) candidates.push(explicit);
-
   const pathDirs = (process.env.PATH ?? "").split(process.platform === "win32" ? ";" : ":");
   const names = process.platform === "win32" ? ["dsh.cmd", "dsh.exe", "dsh.bat"] : ["dsh"];
   for (const dir of pathDirs) {
@@ -328,6 +380,18 @@ function resolveDshLaunch() {
       for (const dir of dirs) {
         for (const name of names) candidates.push(join(generations, dir, "bin", name));
       }
+    }
+  }
+
+  // DSH can be installed anywhere, and the daemon that launches this bridge may
+  // carry a stale environment (the desktop app restarts its own daemon and
+  // inherits whatever the app was started with). Neither PATH nor a fixed
+  // location is therefore dependable, so fall back to what the Windows
+  // uninstaller records for the product.
+  for (const root of windowsInstallRoots()) {
+    for (const name of names) {
+      candidates.push(join(root, "resources", "runtime", "cli", "bin", name));
+      candidates.push(join(root, "DSH Desktop", "resources", "runtime", "cli", "bin", name));
     }
   }
 
