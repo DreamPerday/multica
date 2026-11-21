@@ -15,6 +15,9 @@ const prompt = process.argv[2] ?? "回答两个字：收到";
 // Third argument lets the probe run in a Multica task workdir, which is where
 // the sandbox behaves differently from a plain project directory.
 const probeCwd = process.argv[3] ?? "D:\\养猪";
+// Fourth argument resumes an existing DSH session, which is how Multica drives
+// a chat: the session was created in an earlier task directory.
+const resumeSessionId = process.argv[4] ?? "";
 
 const child = spawn(process.execPath, [join(here, "..", "bridge.mjs"), "--profile", "multica", "--stdio"], {
   cwd: probeCwd,
@@ -67,6 +70,7 @@ child.stdin.write(
     cwd: probeCwd,
     prompt,
     mcp_servers: [],
+    ...(resumeSessionId ? { resume_session_id: resumeSessionId } : {}),
   })}\n`,
 );
 
